@@ -1,30 +1,31 @@
-from fastapi import FastAPI
-from sqlalchemy import text, select
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
-from app.db.session import engine
-from app.db.models import Base, Meeting
-from app.db.deps import get_db
+from fastapi import FastAPI
+from fastapi import HTTPException
+import logging
+import os
+import time
 import uuid
 
-
-#chunking
-from fastapi import HTTPException
-from sqlalchemy import select
-from app.db.models import Meeting, Document, Chunk
-from app.schemas.documents import DocumentCreate, DocumentCreateResponse
-from app.schemas.chat import ChatRequest, ChatResponse
-from app.ingestion.chunking import chunk_text
-from app.ai.embeddings import embed_texts
-from app.ai.client import retrieve_similar_chunks, answer_with_citations
-
-#apikey
 from dotenv import load_dotenv
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.client import CHAT_MODEL, answer_with_citations, retrieve_similar_chunks
+from app.ai.embeddings import EMBEDDING_MODEL, embed_texts
+from app.db.deps import get_db
+from app.db.models import Base, Chunk, Document, Meeting
+from app.db.session import engine
+from app.ingestion.chunking import chunk_text
+from app.observability.runs import log_chat_run
+from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.documents import DocumentCreate, DocumentCreateResponse
 
 load_dotenv()
 
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
+DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 @app.on_event("startup")
 async def startup():
@@ -116,6 +117,9 @@ async def create_document(meeting_id: uuid.UUID, payload: DocumentCreate, db: As
 
 @app.post("/meetings/{meeting_id}/chat", response_model=ChatResponse)
 async def chat_with_meeting(meeting_id: uuid.UUID, payload: ChatRequest, db: AsyncSession = Depends(get_db)):
+    # Capture total request latency for observability.
+    t0 = time.monotonic()
+
     result = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
     meeting = result.scalar_one_or_none()
     if not meeting:
@@ -125,9 +129,49 @@ async def chat_with_meeting(meeting_id: uuid.UUID, payload: ChatRequest, db: Asy
     if not query_vectors:
         raise HTTPException(status_code=500, detail="failed to embed question")
 
+    # Retrieve relevant context chunks before generation.
     chunks = await retrieve_similar_chunks(db, meeting_id, query_vectors[0], top_k=6)
+    retrieved_chunk_ids = [str(chunk.id) for chunk in chunks]
+    if DEBUG_GROUNDING:
+        logger.info("grounding.retrieved_chunks meeting_id=%s count=%d", meeting_id, len(chunks))
     if not chunks:
-        return ChatResponse(answer="I don't know based on the provided context.", citations=[])
+        response = ChatResponse(answer="I don't know based on the provided context.", citations=[])
+        try:
+            # Best-effort run logging: failures must not break user-facing responses.
+            await log_chat_run(
+                db=db,
+                meeting_id=meeting_id,
+                question=payload.question,
+                retrieved_chunk_ids=retrieved_chunk_ids,
+                citations=response.model_dump()["citations"],
+                had_retry=False,
+                invalid_reason_counts={},
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                model=CHAT_MODEL,
+                embedding_model=EMBEDDING_MODEL,
+            )
+        except Exception:
+            logger.exception("failed to log chat run")
+        return response
 
-    grounded = await answer_with_citations(payload.question, chunks)
-    return ChatResponse(**grounded)
+    grounded, meta = await answer_with_citations(payload.question, chunks)
+    response = ChatResponse(**grounded)
+
+    try:
+        # Persist a run row for debugging/audit: retrieval, citations, retry metadata, latency.
+        await log_chat_run(
+            db=db,
+            meeting_id=meeting_id,
+            question=payload.question,
+            retrieved_chunk_ids=retrieved_chunk_ids,
+            citations=response.model_dump()["citations"],
+            had_retry=bool(meta.get("had_retry", False)),
+            invalid_reason_counts=dict(meta.get("invalid_reason_counts", {})),
+            latency_ms=int((time.monotonic() - t0) * 1000),
+            model=CHAT_MODEL,
+            embedding_model=EMBEDDING_MODEL,
+        )
+    except Exception:
+        logger.exception("failed to log chat run")
+
+    return response
