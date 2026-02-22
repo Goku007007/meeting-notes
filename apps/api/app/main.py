@@ -16,9 +16,11 @@ from app.db.deps import get_db
 from app.db.models import Base, Chunk, Document, Meeting
 from app.db.session import engine
 from app.ingestion.chunking import chunk_text
-from app.observability.runs import log_chat_run
+from app.observability.runs import log_chat_run, log_verify_run
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.documents import DocumentCreate, DocumentCreateResponse
+from app.schemas.verify import VerifyResponse
+from app.verifier.engine import verify_meeting
 
 load_dotenv()
 
@@ -175,3 +177,34 @@ async def chat_with_meeting(meeting_id: uuid.UUID, payload: ChatRequest, db: Asy
         logger.exception("failed to log chat run")
 
     return response
+
+
+@app.post("/meetings/{meeting_id}/verify", response_model=VerifyResponse)
+async def verify_endpoint(meeting_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    # Step 6.3: endpoint wrapper around verifier engine so frontend can use the feature.
+    t0 = time.monotonic()
+
+    result = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+    meeting = result.scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="meeting not found")
+
+    # Step 6.3: run extraction + grounding + rule checks.
+    verify_response, meta = await verify_meeting(db=db, meeting_id=meeting_id)
+
+    try:
+        # Step 6.3: best-effort run logging (endpoint response should not fail if logging fails).
+        await log_verify_run(
+            db=db,
+            meeting_id=meeting_id,
+            retrieved_chunk_ids=list(meta.get("retrieved_chunk_ids", [])),
+            verify_payload=verify_response.model_dump(),
+            had_retry=bool(meta.get("had_retry", False)),
+            invalid_reason_counts=dict(meta.get("invalid_reason_counts", {})),
+            latency_ms=int((time.monotonic() - t0) * 1000),
+            model=str(meta.get("model", "gpt-4.1-mini")),
+        )
+    except Exception:
+        logger.exception("failed to log verify run")
+
+    return verify_response
