@@ -2,6 +2,15 @@
 
 This is the implementation plan for a new frontend app based on the current backend contract in `backendap.md`.
 
+## 0) Locked Build Decisions
+
+- Mobile workspace uses **Tabs**: `Documents`, `Verify`, `Chat`.
+- Poll only `GET /meetings/{meeting_id}/documents` for indexing status.
+- Stop polling when all documents are terminal (`indexed` or `failed`).
+- Keep chat history in local UI state for v1 (do not persist in React Query cache yet).
+- Use evidence chips + drawer in both Chat and Verify.
+- Show `NoEvidenceCallout` when citations are empty.
+
 ## 1) Product Goal
 
 Build a meeting workspace where users can:
@@ -89,6 +98,7 @@ Header:
 - Meeting title
 - Global status pill (from `MeetingIndexState`)
 - Last indexed timestamp (max `indexed_at` across docs)
+- `Demo / No Auth` badge in `TopNav` (explicit product mode)
 
 Desktop layout:
 - Left: Documents + Verify
@@ -162,6 +172,17 @@ Create `lib/api/client.ts`:
 - normalized error extraction (`detail` handling)
 - env base URL: `NEXT_PUBLIC_API_BASE_URL`
 
+Standardize all thrown API errors to one shape for UI consistency:
+
+```ts
+export type ApiError = {
+  message: string;
+  status: number;
+};
+```
+
+`fetchJson` should always throw `ApiError` so all screens can use one toast/banner pattern.
+
 ## 7.2 React Query Hooks
 
 `lib/queries/meetings.ts`
@@ -195,9 +216,13 @@ apps/web/
     app/
       layout.tsx
       providers.tsx
+      loading.tsx
+      error.tsx
       page.tsx
       meetings/
         [meetingId]/
+          loading.tsx
+          error.tsx
           page.tsx
     components/
       layout/
@@ -320,6 +345,19 @@ Mobile:
 - Verify while not indexed -> disabled CTA with helper text
 - `FAILED_ONLY` state -> prominent `Retry indexing` guidance
 - Add `Demo mode` label (no auth yet)
+- Route-level fallbacks required:
+  - `src/app/loading.tsx`, `src/app/error.tsx`
+  - `src/app/meetings/[meetingId]/loading.tsx`, `src/app/meetings/[meetingId]/error.tsx`
+  - No page should fail into blank state on slow/failed network
+
+Evidence drawer contract (shared by Chat and Verify):
+- Desktop: right-side sheet (`side=\"right\"`)
+- Mobile: bottom sheet (`side=\"bottom\"`)
+- Content order:
+  1. `chunk_id`
+  2. `quote`
+  3. copy buttons for both
+- Keep this behavior identical in both `EvidenceDrawer` and `CitationDrawer`.
 
 ## 12) Accessibility + Interaction Requirements
 
@@ -335,6 +373,7 @@ Phase 1: App skeleton + providers
 - Next.js app scaffold
 - Tailwind + shadcn setup
 - React Query provider and toaster
+- Route-level loading/error files for root and meeting routes
 
 Phase 2: Meetings Home
 - list meetings

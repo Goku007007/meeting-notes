@@ -2,6 +2,7 @@ from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import Header
 from fastapi import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
 import time
@@ -35,6 +36,18 @@ load_dotenv()
 app = FastAPI()
 logger = logging.getLogger(__name__)
 DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+# Allow the local frontend app to call the API during development.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup():
