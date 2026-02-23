@@ -6,3 +6,6 @@ greenlet
 openai==2.21.0
 pgvector==0.4.2
 python-dotenv==1.2.1
+redis
+rq
+alembic

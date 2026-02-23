@@ -43,6 +43,7 @@ async def load_meeting_chunks(
     stmt = (
         select(Chunk)
         .where(Chunk.meeting_id == meeting_id)
+        .where(Chunk.embedding.is_not(None))
         .order_by(Chunk.chunk_index.asc())
         .limit(limit)
     )

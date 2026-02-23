@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -14,5 +16,23 @@ class DocumentCreate(BaseModel):
 
 class DocumentCreateResponse(BaseModel):
     document_id: str
-    chunks_created: int
-    
+    status: str
+
+
+class DocumentStatusResponse(BaseModel):
+    document_id: str
+    status: str
+    error: str | None = None
+    processing_started_at: datetime | None = None
+    indexed_at: datetime | None = None
+
+
+class DocumentListItemResponse(BaseModel):
+    document_id: str
+    meeting_id: str
+    doc_type: str
+    filename: str | None = None
+    status: str
+    error: str | None = None
+    processing_started_at: datetime | None = None
+    indexed_at: datetime | None = None

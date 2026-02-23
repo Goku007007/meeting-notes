@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
@@ -29,6 +30,10 @@ class Document(Base):
     doc_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -63,6 +68,8 @@ class Run(Base):
     retrieved_chunk_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     # Final citations returned to the caller.
     response_citations: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    # Generic output payload for non-chat run types (e.g., verify JSON).
+    response_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Guardrail metadata for debugging citation quality.
     had_retry: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     invalid_citation_reasons: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False, default=dict)

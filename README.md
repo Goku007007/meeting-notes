@@ -1,173 +1,179 @@
 # meeting-notes
 
-AI-assisted meeting workspace that turns notes into grounded answers with citations.
+Backend-first meeting intelligence API for:
 
-This repository is being built toward a full product (users, frontend, collaboration).  
-Current implementation is backend-first and focuses on ingestion, retrieval, guardrails, and observability.
+- async document indexing (chunk + embed in background)
+- grounded chat answers with citations
+- meeting verification (decisions/actions/issues) with evidence IDs
+- run-level observability for debugging and audits
 
-## Product Vision
+## Current Status
 
-`meeting-notes` is intended to become a full application where users can:
+Implemented in this repo today:
 
-- create and manage meetings
-- upload/paste notes/transcripts
-- ask questions over meeting content
-- get citation-backed answers
-- audit how answers were produced
+- FastAPI API in `apps/api/app/main.py`
+- Postgres + `pgvector` for chunk storage/retrieval
+- Redis + RQ for background indexing jobs
+- Alembic migrations as the schema source of truth
+- Guardrails for citation/evidence grounding
+- Integration and unit test suite (`unittest`)
+- GitHub Actions CI (runs migrations, then tests)
 
-Target product areas (in progress/planned):
-
-- user accounts and authentication
-- frontend application (dashboard + chat UI)
-- team/project-level collaboration
-- richer retrieval and analytics
-
-## Current Scope (Implemented Today)
-
-Backend API currently supports:
-
-- meeting creation and lookup
-- document ingestion into meetings
-- chunk generation + embedding storage (`pgvector`)
-- retrieval scoped by `meeting_id`
-- grounded chat responses with citation guardrails
-- one-retry guardrail path and safe fallback
-- per-chat run logging (`runs` table) for debugging/audit
-- unit + integration tests
-- CI test workflow on push/PR
-
-## Repository Structure
+## Repository Layout
 
 ```text
 meeting-notes/
-  apps/
-    api/
-      app/
-        ai/                # embeddings, retrieval, grounding logic
-        db/                # models, engine/session, DB deps
-        ingestion/         # text chunking
-        observability/     # run logging helper
-        schemas/           # request/response models
-        main.py            # FastAPI app + route orchestration
-      tests/               # unit + integration tests
-      requirements.txt
-  infra/
-    db/init.sql            # DB initialization for local Docker
-  docker-compose.yml
+  apps/api/
+    app/
+      ai/                  # OpenAI clients, embeddings, chat guardrails
+      db/                  # SQLAlchemy models, engine/session, DB deps
+      ingestion/           # text chunking utility
+      jobs/                # background indexing + stale-processing reaper
+      observability/       # run logging helpers
+      schemas/             # request/response models
+      verifier/            # verify engine (LLM + deterministic checks)
+      main.py              # API endpoints/orchestration
+      queue.py             # Redis/RQ queue helpers
+      worker.py            # RQ worker entrypoint
+    alembic/               # migration env + versions
+    tests/                 # grounding/chat/verify/reliability tests
+    requirements.txt
+  infra/db/init.sql        # local DB extension bootstrap
+  docker-compose.yml       # db + redis
   .github/workflows/tests.yml
 ```
 
-## Backend Architecture
+## Architecture
 
 ### API Layer
 
-- `apps/api/app/main.py`
-  - route handlers
-  - ingestion orchestration
-  - chat orchestration
-  - startup DB/table initialization
+- `POST /meetings/{meeting_id}/documents`:
+  - creates `documents` row as `pending`
+  - commits row first
+  - enqueues indexing job
+- `POST /meetings/{meeting_id}/chat`:
+  - embeds question
+  - retrieves top chunks by cosine distance
+  - generates grounded answer
+  - validates citations and retries once if invalid
+- `POST /meetings/{meeting_id}/verify`:
+  - loads meeting chunks (broad context)
+  - extracts structured verify output
+  - validates evidence IDs + deterministic issue checks
+- `POST /documents/{document_id}/reindex`:
+  - resets doc state to `pending`
+  - re-enqueues indexing job
+- `POST /internal/reaper/trigger`:
+  - enqueues stale-processing cleanup job
+  - optional header auth via `REAPER_TRIGGER_TOKEN`
 
-### AI Layer
+### Worker / Queue Layer
 
-- `apps/api/app/ai/embeddings.py`
-  - batched embedding generation (`text-embedding-3-small`)
-- `apps/api/app/ai/client.py`
-  - vector retrieval
-  - grounded response generation
-  - citation validation + retry metadata
-- `apps/api/app/ai/grounding.py`
-  - deterministic citation validation rules
+- Queue config in `apps/api/app/queue.py`
+  - deduped `job_id` for indexing jobs
+  - timeout + retries with env-configured backoff
+- Worker entrypoint in `apps/api/app/worker.py`
+- Indexing job in `apps/api/app/jobs/indexing.py`
+  - marks `processing`
+  - chunks + embeds
+  - writes new chunks first
+  - marks `indexed`
+  - best-effort deletes previous chunk set afterward (avoids zero-chunk downtime)
+- Reaper job marks stale `processing` docs as `failed`
 
-### Data Layer
+### AI / Guardrails Layer
 
-- `apps/api/app/db/models.py`
-  - `Meeting`, `Document`, `Chunk`, `Run`
-- `apps/api/app/db/session.py`
-  - async engine/session factory
-  - `DATABASE_URL` env support
-- `apps/api/app/db/deps.py`
-  - FastAPI DB dependency
+- `apps/api/app/ai/embeddings.py`: batch embeddings (`text-embedding-3-small`)
+- `apps/api/app/ai/client.py`: retrieval + grounded answer generation
+- `apps/api/app/ai/grounding.py`: deterministic citation checks
+  - disallow unknown chunk IDs
+  - disallow missing/oversized quotes
+  - require quote substring match in chunk text
+- `apps/api/app/verifier/engine.py`:
+  - strict JSON schema output
+  - evidence ID validation + retry
+  - deterministic issue rules (`missing_owner`, `missing_due_date`, `vague`)
 
 ### Observability Layer
 
-- `apps/api/app/observability/runs.py`
-  - centralized `log_chat_run(...)` helper
+`apps/api/app/observability/runs.py` writes one `runs` row per chat/verify call:
 
-## Data Model (Current)
+- retrieval ids
+- model outputs (`response_json`)
+- chat citations (`response_citations`)
+- retry and invalid reason counts
+- latency and model metadata
 
-- `meetings`: meeting metadata
-- `documents`: source documents per meeting
-- `chunks`: chunked text + embedding vectors
-- `runs`: per-chat audit records (question, retrieved IDs, citations, retry/invalid metadata, latency, model names)
+## Data Model
 
-## Request Flows
+Main tables in `apps/api/app/db/models.py`:
 
-### Ingestion Flow (`POST /meetings/{meeting_id}/documents`)
+- `meetings`
+- `documents` (`status`, `error`, `processing_started_at`, `indexed_at`)
+- `chunks` (`Vector(1536)` embedding)
+- `runs` (`run_type`, retrieval ids, citations/json, retry metadata, latency, model info)
 
-1. validate meeting exists
-2. create `Document`
-3. chunk raw text
-4. embed all chunks in one batch
-5. insert `Chunk` rows with embeddings
-6. commit once
-7. rollback on failure
+## Migrations (Alembic)
 
-### Chat Flow (`POST /meetings/{meeting_id}/chat`)
+Alembic lives in `apps/api/alembic`.
 
-1. embed question
-2. retrieve top-k similar chunks in same meeting
-3. call model with context and strict JSON schema response format
-4. validate citations against retrieved chunk allowlist
-5. retry once with stricter citation rules if needed
-6. fallback to safe answer with empty citations if still invalid
-7. write one run row (best effort; does not block response if logging fails)
+- baseline: `20260222_0001_initial_schema.py`
+- add `runs.response_json`: `20260222_0002_runs_response_json.py`
 
-## Guardrails and Reliability
+Commands (from `apps/api`):
 
-Citation validator rejects:
+```bash
+./.venv/bin/alembic upgrade head
+./.venv/bin/alembic revision --autogenerate -m "message"
+./.venv/bin/alembic downgrade -1
+```
 
-- chunk IDs not in retrieved set
-- missing quotes
-- overly long quotes
-- quotes not present in cited chunk text (normalized matching)
+If your local DB pre-dates Alembic and already has tables:
 
-This keeps citation output deterministic and auditable.
+```bash
+./.venv/bin/alembic stamp head
+```
 
-## Observability
-
-`runs` table provides a "black-box recorder" for chat requests:
-
-- input question
-- retrieved chunk IDs
-- output citations
-- retry happened or not
-- invalid citation reason counts
-- latency in ms
-- model + embedding model names
-
-This is the main debugging trail when an answer looks wrong.
-
-## API Endpoints (Current)
+## API Endpoints
 
 - `GET /health`
 - `GET /`
+- `GET /meetings`
 - `POST /meetings`
 - `GET /meetings/{meeting_id}`
 - `POST /meetings/{meeting_id}/documents`
+- `GET /meetings/{meeting_id}/documents`
+- `GET /documents/{document_id}`
+- `POST /documents/{document_id}/reindex`
+- `POST /internal/reaper/trigger`
 - `POST /meetings/{meeting_id}/chat`
+- `POST /meetings/{meeting_id}/verify`
 
 ## Environment Variables
 
-- `OPENAI_API_KEY` (required for embedding/model calls)
-- `DATABASE_URL` (optional locally, required in most CI/prod setups)
-- `DEBUG_GROUNDING` (`true/false`, optional verbose grounding logs)
+Core:
+
+- `OPENAI_API_KEY`
+- `DATABASE_URL` (default: `postgresql+asyncpg://postgres:postgres@localhost:5432/meetingnotes`)
+- `REDIS_URL` (default: `redis://localhost:6379/0`)
+- `DEBUG_GROUNDING` (`true|false`)
+- `REAPER_TRIGGER_TOKEN` (optional; protects reaper trigger endpoint)
+
+Queue tuning:
+
+- `INDEX_JOB_TIMEOUT_SECONDS` (default `900`)
+- `INDEX_JOB_RETRY_MAX` (default `3`)
+- `INDEX_JOB_RETRY_INTERVALS` (default `30,120,300`)
+- `STALE_PROCESSING_MINUTES` (default `30`)
 
 Example `apps/api/.env`:
 
 ```env
 OPENAI_API_KEY="sk-..."
 DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/meetingnotes"
+REDIS_URL="redis://localhost:6379/0"
 DEBUG_GROUNDING="false"
+REAPER_TRIGGER_TOKEN="change-me"
 ```
 
 ## Local Development
@@ -180,54 +186,77 @@ From repo root:
 docker compose up -d db redis
 ```
 
-### 2) Start API
+### 2) Install deps and run migrations
+
+```bash
+cd apps/api
+./.venv/bin/pip install -r requirements.txt
+set -a
+source .env
+set +a
+./.venv/bin/alembic upgrade head
+```
+
+### 3) Start API
+
+```bash
+./.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+### 4) Start worker (separate terminal)
 
 ```bash
 cd apps/api
 set -a
 source .env
 set +a
-./.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+./.venv/bin/python -m app.worker
 ```
 
-### 3) Run tests
+### 5) Optional scheduled reaper trigger
+
+```bash
+curl -X POST "http://127.0.0.1:8000/internal/reaper/trigger?max_age_minutes=30" \
+  -H "x-reaper-token: ${REAPER_TRIGGER_TOKEN}"
+```
+
+## Tests
+
+Run all tests:
 
 ```bash
 cd apps/api
 ./.venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
+Coverage today includes:
+
+- citation grounding unit tests
+- chat integration tests
+- verify integration tests
+- indexing reliability tests (reindex + reaper + downtime regression)
+
 ## CI
 
-Workflow: `/.github/workflows/tests.yml`
+Workflow: `.github/workflows/tests.yml`
 
-- runs on push + pull_request
-- starts Postgres (`pgvector/pgvector:pg16`)
-- installs API dependencies
-- runs test suite (`unittest discover`)
+Pipeline:
 
-## Roadmap (Near-Term)
+1. start Postgres (`pgvector/pgvector:pg16`)
+2. install dependencies
+3. run `alembic upgrade head`
+4. run unit/integration tests
 
-### Backend
+## Known Limitations
 
-- migrate from `create_all` to Alembic migrations
-- move startup event to FastAPI lifespan pattern
-- improve timestamp handling (`datetime.utcnow` deprecation cleanup)
-- add pagination/filtering for meetings/documents/runs
+- No auth yet (all endpoints are open in local/dev).
+- Reaper trigger is manual unless wired to cron/scheduler.
+- Some timestamps still use `datetime.utcnow` (deprecation cleanup pending).
 
-### Product Features
+## Near-Term Next Steps
 
-- add users/auth (session/JWT/OAuth)
-- add multi-user access control per meeting/workspace
-- build frontend (meeting list, document upload, chat UI, run inspection)
-- add feedback loop for answer quality and retrieval tuning
-
-## Notes
-
-This README is intentionally product-level and forward-looking.  
-It documents both:
-
-- what is implemented now
-- what the application is expected to become
-
-As the frontend and user system are added, update this file first so architecture and scope stay explicit.
+- add auth + user/workspace model
+- add frontend for meetings/documents/chat/verify
+- add reaper scheduler in deployment
+- migrate FastAPI startup to lifespan
+- tighten timestamp handling to timezone-aware defaults throughout

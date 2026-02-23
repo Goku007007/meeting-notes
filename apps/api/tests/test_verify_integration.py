@@ -21,6 +21,7 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
         async with engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
             await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS response_json JSONB;"))
         self.db = SessionLocal()
 
     async def asyncTearDown(self) -> None:
@@ -156,9 +157,8 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.run_type, "verify")
         self.assertEqual(run.input_text, "verify")
         self.assertEqual(set(run.retrieved_chunk_ids), {chunk_id})
-        self.assertIsInstance(run.response_citations, list)
-        self.assertGreaterEqual(len(run.response_citations), 1)
-        self.assertEqual(run.response_citations[0], response.model_dump())
+        self.assertEqual(run.response_citations, [])
+        self.assertEqual(run.response_json, response.model_dump())
 
 
 if __name__ == "__main__":

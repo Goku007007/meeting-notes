@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 
 from app.db.models import Base, Meeting, Run
 from app.db.session import SessionLocal, engine
+from app.jobs.indexing import index_document_async
 from app.main import create_document, chat_with_meeting
 from app.schemas.chat import ChatRequest
 from app.schemas.documents import DocumentCreate
@@ -26,6 +27,7 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
         async with engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
             await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS response_json JSONB;"))
         self.db = SessionLocal()
 
     async def asyncTearDown(self) -> None:
@@ -40,10 +42,11 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.db.refresh(meeting)
         return str(meeting.id)
 
-    async def _ingest_doc(self, meeting_id: str, text_value: str) -> None:
+    async def _ingest_doc(self, meeting_id: str, text_value: str) -> str:
         payload = DocumentCreate(doc_type="notes", filename="it.txt", text=text_value)
         result = await create_document(uuid.UUID(meeting_id), payload, self.db)
-        self.assertGreaterEqual(result.chunks_created, 1)
+        self.assertEqual(result.status, "pending")
+        return result.document_id
 
     async def _latest_run(self, meeting_id: str) -> Run:
         result = await self.db.execute(
@@ -79,9 +82,14 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "app.main.answer_with_citations", _good_answer
         ), patch(
             "app.main.retrieve_similar_chunks", _capture_retrieve
+        ), patch(
+            "app.main.enqueue_index_document", lambda _document_id: "queued"
+        ), patch(
+            "app.jobs.indexing.embed_texts", _fake_embed_texts
         ):
             meeting_id = await self._create_meeting()
-            await self._ingest_doc(meeting_id, "We decided to ship Friday. Alice owns QA.")
+            doc_id = await self._ingest_doc(meeting_id, "We decided to ship Friday. Alice owns QA.")
+            await index_document_async(doc_id)
             response = await chat_with_meeting(
                 uuid.UUID(meeting_id),
                 ChatRequest(question="What did we decide?"),
@@ -126,9 +134,14 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "app.main.answer_with_citations", _bad_answer
         ), patch(
             "app.main.retrieve_similar_chunks", _capture_retrieve
+        ), patch(
+            "app.main.enqueue_index_document", lambda _document_id: "queued"
+        ), patch(
+            "app.jobs.indexing.embed_texts", _fake_embed_texts
         ):
             meeting_id = await self._create_meeting()
-            await self._ingest_doc(meeting_id, "Budget approved after legal review.")
+            doc_id = await self._ingest_doc(meeting_id, "Budget approved after legal review.")
+            await index_document_async(doc_id)
             response = await chat_with_meeting(
                 uuid.UUID(meeting_id),
                 ChatRequest(question="What was approved?"),
