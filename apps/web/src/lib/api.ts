@@ -28,6 +28,15 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json()) as T;
+}
+
 async function toApiError(res: Response): Promise<ApiError> {
   let message = `Request failed (${res.status})`;
 
@@ -40,4 +49,3 @@ async function toApiError(res: Response): Promise<ApiError> {
 
   return { message, status: res.status };
 }
-

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.client import CHAT_MODEL, answer_with_citations, retrieve_similar_chunks
 from app.ai.embeddings import EMBEDDING_MODEL, embed_texts
 from app.db.deps import get_db
-from app.db.models import Chunk, Document, Meeting
+from app.db.models import Chunk, Document, Meeting, Run
 from app.db.session import engine
 from app.observability.runs import log_chat_run, log_verify_run
 from app.processing import UnsupportedFormatError, validate_supported_upload
@@ -45,14 +45,22 @@ UPLOADS_ROOT = Path(
     os.getenv("UPLOADS_DIR", str(Path(__file__).resolve().parents[3] / "uploads"))
 )
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+CORS_ALLOW_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+    if origin.strip()
+]
+# Default local-dev safety net: allow localhost/127.0.0.1 on any port.
+CORS_ALLOW_ORIGIN_REGEX = os.getenv(
+    "CORS_ALLOW_ORIGIN_REGEX",
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+)
 
 # Allow the local frontend app to call the API during development.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -144,14 +152,19 @@ async def create_document(meeting_id: uuid.UUID, payload: DocumentCreate, db: As
         raise
 
 
-@app.post("/meetings/{meeting_id}/documents/upload", response_model=DocumentCreateResponse)
+@app.post(
+    "/meetings/{meeting_id}/documents/upload",
+    response_model=DocumentCreateResponse | list[DocumentCreateResponse],
+)
 async def upload_document(
     meeting_id: uuid.UUID,
     doc_type: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
+    files: list[UploadFile] | None = File(default=None),
     filename: str | None = Form(default=None),
+    upload_id: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
-):
+) -> DocumentCreateResponse | list[DocumentCreateResponse]:
     """
     Multipart upload endpoint (file-in pipeline).
     Stores the raw file, creates a pending Document row, then enqueues background processing.
@@ -167,73 +180,94 @@ async def upload_document(
     if len(normalized_doc_type) > 50:
         raise HTTPException(status_code=400, detail="doc_type must be 50 characters or less")
 
-    try:
-        # Enforce a strict file-type allowlist at the edge.
-        validate_supported_upload(file.filename, file.content_type)
-    except UnsupportedFormatError as exc:
-        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    upload_files: list[UploadFile] = []
+    if file is not None:
+        upload_files.append(file)
+    if files:
+        upload_files.extend(files)
+    if not upload_files:
+        raise HTTPException(status_code=400, detail="at least one file is required")
 
-    content = await file.read()
-    await file.close()
-    if not content:
-        raise HTTPException(status_code=400, detail="uploaded file is empty")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"file too large; max allowed is {MAX_UPLOAD_BYTES} bytes",
+    responses: list[DocumentCreateResponse] = []
+    for current_file in upload_files:
+        try:
+            # Enforce a strict file-type allowlist at the edge.
+            validate_supported_upload(current_file.filename, current_file.content_type)
+        except UnsupportedFormatError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+        content = await current_file.read()
+        await current_file.close()
+        if not content:
+            raise HTTPException(status_code=400, detail="uploaded file is empty")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"file too large; max allowed is {MAX_UPLOAD_BYTES} bytes",
+            )
+
+        document_id = uuid.uuid4()
+        original_filename = Path(current_file.filename or "upload.bin").name
+        normalized_filename = Path(filename).name if filename else original_filename
+        mime_type = (current_file.content_type or "").strip() or None
+        size_bytes = len(content)
+
+        doc_dir = UPLOADS_ROOT / str(document_id)
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        storage_path = doc_dir / original_filename
+        storage_path.write_bytes(content)
+
+        doc = Document(
+            id=document_id,
+            meeting_id=meeting_id,
+            doc_type=normalized_doc_type,
+            filename=normalized_filename,
+            original_filename=original_filename,
+            mime_type=mime_type,
+            size_bytes=size_bytes,
+            storage_path=str(storage_path),
+            raw_text="",
+            status="pending",
+            error=None,
+            processing_started_at=None,
+            indexed_at=None,
         )
-
-    document_id = uuid.uuid4()
-    original_filename = Path(file.filename or "upload.bin").name
-    normalized_filename = Path(filename).name if filename else original_filename
-    mime_type = (file.content_type or "").strip() or None
-    size_bytes = len(content)
-
-    doc_dir = UPLOADS_ROOT / str(document_id)
-    doc_dir.mkdir(parents=True, exist_ok=True)
-    storage_path = doc_dir / original_filename
-    storage_path.write_bytes(content)
-
-    doc = Document(
-        id=document_id,
-        meeting_id=meeting_id,
-        doc_type=normalized_doc_type,
-        filename=normalized_filename,
-        original_filename=original_filename,
-        mime_type=mime_type,
-        size_bytes=size_bytes,
-        storage_path=str(storage_path),
-        raw_text="",
-        status="pending",
-        error=None,
-        processing_started_at=None,
-        indexed_at=None,
-    )
-    db.add(doc)
-
-    try:
-        await db.commit()
-        await db.refresh(doc)
+        db.add(doc)
 
         try:
-            enqueue_index_document(str(doc.id))
-        except Exception as queue_exc:
-            doc.status = "failed"
-            doc.error = f"queue failed: {queue_exc}"[:4000]
             await db.commit()
-            raise HTTPException(status_code=500, detail="failed to enqueue indexing job")
+            await db.refresh(doc)
 
-        return DocumentCreateResponse(document_id=str(doc.id), status=doc.status)
-    except Exception:
-        await db.rollback()
-        try:
-            if storage_path.exists():
-                storage_path.unlink()
-            if doc_dir.exists() and not any(doc_dir.iterdir()):
-                doc_dir.rmdir()
+            try:
+                enqueue_index_document(str(doc.id))
+            except Exception as queue_exc:
+                doc.status = "failed"
+                doc.error = f"queue failed: {queue_exc}"[:4000]
+                await db.commit()
+                raise HTTPException(status_code=500, detail="failed to enqueue indexing job")
+
+            responses.append(
+                DocumentCreateResponse(
+                    document_id=str(doc.id),
+                    status=doc.status,
+                    original_filename=original_filename,
+                    upload_id=upload_id,
+                )
+            )
         except Exception:
-            logger.exception("failed to clean up uploaded file after create failure")
-        raise
+            await db.rollback()
+            try:
+                if storage_path.exists():
+                    storage_path.unlink()
+                if doc_dir.exists() and not any(doc_dir.iterdir()):
+                    doc_dir.rmdir()
+            except Exception:
+                logger.exception("failed to clean up uploaded file after create failure")
+            raise
+
+    if len(responses) == 1:
+        return responses[0]
+    return responses
 
 
 @app.get("/meetings/{meeting_id}/documents", response_model=list[DocumentListItemResponse])
@@ -361,6 +395,46 @@ async def _meeting_has_indexed_chunks(db: AsyncSession, meeting_id: uuid.UUID) -
     return result.scalar_one_or_none() is not None
 
 
+async def _load_recent_chat_turns(
+    db: AsyncSession,
+    meeting_id: uuid.UUID,
+    limit: int = 6,
+) -> list[tuple[str, str | None]]:
+    """
+    Load recent chat runs (oldest -> newest) for lightweight conversational continuity.
+    Each tuple is (user_question, assistant_answer_or_none).
+    """
+    result = await db.execute(
+        select(Run)
+        .where(Run.meeting_id == meeting_id)
+        .where(Run.run_type == "chat")
+        .order_by(Run.created_at.desc())
+        .limit(limit)
+    )
+    runs = list(reversed(result.scalars().all()))
+    turns: list[tuple[str, str | None]] = []
+    for run in runs:
+        user_question = (run.input_text or "").strip()
+        if not user_question:
+            continue
+        assistant_answer: str | None = None
+        if isinstance(run.response_json, dict):
+            value = run.response_json.get("answer")
+            if isinstance(value, str) and value.strip():
+                assistant_answer = value.strip()
+        turns.append((user_question, assistant_answer))
+    return turns
+
+
+def _format_history_for_chat_prompt(turns: list[tuple[str, str | None]]) -> str:
+    lines: list[str] = []
+    for user_question, assistant_answer in turns:
+        lines.append(f"User: {user_question}")
+        if assistant_answer:
+            lines.append(f"Assistant: {assistant_answer}")
+    return "\n".join(lines)
+
+
 @app.post("/meetings/{meeting_id}/chat", response_model=ChatResponse)
 async def chat_with_meeting(meeting_id: uuid.UUID, payload: ChatRequest, db: AsyncSession = Depends(get_db)):
     # Capture total request latency for observability.
@@ -371,7 +445,16 @@ async def chat_with_meeting(meeting_id: uuid.UUID, payload: ChatRequest, db: Asy
     if not meeting:
         raise HTTPException(status_code=404, detail="meeting not found")
 
-    query_vectors = await embed_texts([payload.question])
+    recent_turns = await _load_recent_chat_turns(db=db, meeting_id=meeting_id, limit=6)
+
+    # Improve follow-up questions ("what about that?") by enriching retrieval query
+    # with a small amount of recent user context.
+    recent_user_questions = [q for q, _ in recent_turns[-2:]]
+    retrieval_question = payload.question
+    if recent_user_questions:
+        retrieval_question = "\n".join([*recent_user_questions, payload.question])
+
+    query_vectors = await embed_texts([retrieval_question])
     if not query_vectors:
         raise HTTPException(status_code=500, detail="failed to embed question")
 
@@ -411,7 +494,16 @@ async def chat_with_meeting(meeting_id: uuid.UUID, payload: ChatRequest, db: Asy
             logger.exception("failed to log chat run")
         return response
 
-    grounded, meta = await answer_with_citations(payload.question, chunks)
+    history_text = _format_history_for_chat_prompt(recent_turns)
+    model_question = payload.question
+    if history_text:
+        model_question = (
+            "Use prior turns only when relevant for disambiguation.\n\n"
+            f"CHAT HISTORY (oldest to newest):\n{history_text}\n\n"
+            f"CURRENT QUESTION:\n{payload.question}"
+        )
+
+    grounded, meta = await answer_with_citations(model_question, chunks)
     response = ChatResponse(**grounded)
 
     try:

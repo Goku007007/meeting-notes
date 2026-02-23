@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# meeting-notes web
 
-## Getting Started
+Next.js frontend for the meeting-notes project.
 
-First, run the development server:
+## Tech
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Next.js (App Router, TypeScript)
+- Tailwind CSS
+- shadcn/ui
+- TanStack Query
+- sonner
+
+## Prerequisites
+
+- Node 20+
+- Backend API running at `http://127.0.0.1:8000`
+
+## Environment
+
+Create `apps/web/.env.local`:
+
+```env
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Install and Run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cd apps/web
+npm install
+npm run dev -- --port 3010
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open: `http://localhost:3010`
 
-## Learn More
+## Build
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run build
+npm start
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Current UX
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Desktop shell with left meetings rail + center chat + right artifacts rail
+- Mobile meetings drawer and workspace tabs
+- Attachment-based chat composer
+- Polling document status during indexing
+- Verify panel for structured artifacts
+- Local per-meeting chat history persistence across refresh
 
-## Deploy on Vercel
+## Key Source Paths
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Routing: `src/app/(app)/...`
+- Shell: `src/components/shell/`
+- Workspace: `src/components/layout/MeetingWorkspace.tsx`
+- Chat: `src/components/chat/`
+- Documents: `src/components/documents/`
+- Verify: `src/components/verify/`
+- Query hooks: `src/lib/queries/`
+- API client: `src/lib/api.ts`

@@ -9,7 +9,7 @@ def _normalize(s: str) -> str:
 def validate_citations(
     citations: list[dict[str, Any]] | None,
     chunk_text_by_id: dict[str, str],
-    max_quote_chars: int = 200,
+    max_quote_chars: int = 2000,
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """
     Returns (valid_citations, invalid_citations).

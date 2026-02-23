@@ -1,59 +1,72 @@
-# Frontend Plan (UI/UX + Architecture)
+# Frontend Plan and Current Architecture (Next.js)
 
-This is the implementation plan for a new frontend app based on the current backend contract in `backendap.md`.
+This document captures the current frontend architecture and the next implementation steps.
 
-## 0) Locked Build Decisions
+Backend contract reference: `backendap.md`
 
-- Mobile workspace uses **Tabs**: `Documents`, `Verify`, `Chat`.
-- Poll only `GET /meetings/{meeting_id}/documents` for indexing status.
-- Stop polling when all documents are terminal (`indexed` or `failed`).
-- Keep chat history in local UI state for v1 (do not persist in React Query cache yet).
-- Use evidence chips + drawer in both Chat and Verify.
-- Show `NoEvidenceCallout` when citations are empty.
-
-## 1) Product Goal
-
-Build a meeting workspace where users can:
-1. Create/select a meeting.
-2. Ingest notes/transcripts.
-3. Track indexing status clearly.
-4. Run `Verify` for structured outputs and issues.
-5. Ask `Chat` questions with citations.
-
-## 2) Stack
+## 1) Stack
 
 - Next.js (TypeScript, App Router)
 - Tailwind CSS
 - shadcn/ui
 - TanStack Query
-- react-hook-form + zod
-- react-markdown
 - lucide-react
+- sonner (toasts)
 
-## 3) UX Principles
+## 2) Implemented Architecture
 
-- Show system state explicitly (indexing, partial, failed, ready).
-- Never hide uncertainty (`I don't know`, no citations, indexing in progress).
-- Keep primary actions always visible (ingest, verify, ask).
-- Optimize for one-meeting workspace flow.
-- Mobile-first fallback via tabs.
+## 2.1 Routing
 
-## 4) Information Architecture
+- `src/app/layout.tsx`
+  - root HTML/body + `Providers`
+- `src/app/(app)/layout.tsx`
+  - app shell wrapper (`AppShell`)
+- `src/app/(app)/page.tsx`
+  - home screen
+- `src/app/(app)/meetings/[meetingId]/page.tsx`
+  - meeting workspace
 
-- `/` -> Meetings Home
-- `/meetings/[meetingId]` -> Meeting Workspace
+This route-group approach keeps URLs clean while sharing shell layout.
 
-Workspace sections (tabs on mobile, 2-column on desktop):
-- Documents
-- Verify
-- Chat
+## 2.2 Shell UX
 
-## 5) Derived Meeting Readiness (Single Source of Truth)
+Desktop:
+- Left rail: meetings list + create meeting + home
+- Center: workspace (chat-focused)
+- Right rail: artifacts tabs (`Verify`, `Tasks`, `Issues`, `Docs`)
 
-Create `lib/state/meetingIndexState.ts`:
+Mobile:
+- top nav + meetings drawer
+- in-workspace tabs (`Chat`, `Verify`, `Docs`)
+
+## 2.3 Data Layer
+
+React Query keys in use:
+- `['meetings']`
+- `['meeting', meetingId]`
+- `['meeting-documents', meetingId]`
+- `['verify', meetingId]`
+
+Polling:
+- `useMeetingDocuments(meetingId)` polls every 2s while any doc is `pending|processing`
+- polling stops when all docs are terminal
+
+## 2.4 Chat UX (Current)
+
+- Composer with attachments (`Attach` + `Send`)
+- Message bubbles with citation chips
+- Citation drawer
+- No-citation callout
+- Loading animation (`Thinking...`) and smooth message transitions
+- Auto-scroll to latest message
+- Chat history persisted per meeting in browser localStorage
+
+## 3) Meeting Readiness State
+
+Derived from meeting documents:
 
 ```ts
-export type MeetingIndexState =
+type MeetingIndexState =
   | "EMPTY"
   | "NOT_INDEXED"
   | "PARTIALLY_INDEXED"
@@ -61,349 +74,78 @@ export type MeetingIndexState =
   | "FAILED_ONLY";
 ```
 
-Derive state from `GET /meetings/{meeting_id}/documents`:
-- `EMPTY`: no documents
-- `NOT_INDEXED`: 0 indexed, at least one pending/processing
-- `PARTIALLY_INDEXED`: >=1 indexed and >=1 pending/processing
-- `INDEXED`: >=1 indexed and 0 pending/processing
-- `FAILED_ONLY`: 0 indexed, >=1 failed, 0 pending/processing
+Behavior:
+- Verify enabled for `PARTIALLY_INDEXED` and `INDEXED`
+- Chat blocked only for `NOT_INDEXED`
+- Banners shown for indexing/partial/failed states
 
-UI behavior from state:
-- Verify button enabled for `PARTIALLY_INDEXED` and `INDEXED`
-- Chat input disabled only for `NOT_INDEXED`
-- Show status banner for `NOT_INDEXED` and `PARTIALLY_INDEXED`
-- Show recovery CTA for `FAILED_ONLY`
+## 4) Current Component Map
 
-## 6) Page Plans
-
-## 6.1 Meetings Home (`/`)
-
-Purpose: create and open meetings.
-
-Components:
-- `TopNav`
-- `CreateMeetingDialog`
-- `MeetingsList`
-- `MeetingCard`
-- `EmptyState`
-
-UX details:
-- Quick client-side search on title.
-- Empty state CTA: `Create your first meeting`.
-- Newest meetings first.
-
-## 6.2 Meeting Workspace (`/meetings/[meetingId]`)
-
-Header:
-- Meeting title
-- Global status pill (from `MeetingIndexState`)
-- Last indexed timestamp (max `indexed_at` across docs)
-- `Demo / No Auth` badge in `TopNav` (explicit product mode)
-
-Desktop layout:
-- Left: Documents + Verify
-- Right: Chat
-
-Mobile layout:
-- Tabs: `Documents`, `Verify`, `Chat`
-
-### Documents section
-
-Components:
-- `DocumentUploadForm` (always visible)
-- `DocumentsTable`
-- `DocumentStatusBadge`
-- `ReindexButton`
-- `IndexingBanner`
-
-Fields:
-- `doc_type`, `filename`, `text`
-
-Row actions:
-- Reindex (when not processing)
-- Copy document id
-- Show error tooltip and copy error for failed docs
-
-### Verify section
-
-Components:
-- `VerifyPanel`
-- `SummaryCard`
-- `DecisionsList`
-- `ActionItemsTable`
-- `IssuesBoard`
-- `EvidenceDrawer`
-
-Structure:
-- Collapsible groups:
-  - Summary & Decisions
-  - Action Items
-  - Issues
-
-Rules:
-- `Run Verify` disabled for `EMPTY`, `NOT_INDEXED`, `FAILED_ONLY`
-- Show "last verified" timestamp (from query cache now; runs API later)
-- Keep previous verify result visible until refresh completes
-
-### Chat section
-
-Components:
-- `ChatPanel`
-- `MessageList`
-- `MessageBubble`
-- `CitationChips`
-- `CitationDrawer`
-- `NoEvidenceCallout`
-
-UX details:
-- Suggested question chips before first message:
-  - `What did we decide?`
-  - `What are action items and owners?`
-  - `What's still unclear?`
-- If response has empty citations, show `NoEvidenceCallout`
-- Distinguish assistant states: grounded, unknown, indexing
-
-## 7) Data Layer Plan
-
-## 7.1 API Client
-
-Create `lib/api/client.ts`:
-- shared `fetchJson` wrapper
-- normalized error extraction (`detail` handling)
-- env base URL: `NEXT_PUBLIC_API_BASE_URL`
-
-Standardize all thrown API errors to one shape for UI consistency:
-
-```ts
-export type ApiError = {
-  message: string;
-  status: number;
-};
+```text
+src/components/
+  chat/
+    AttachmentChips.tsx
+    ChatPanel.tsx
+    CitationDrawer.tsx
+    Composer.tsx
+  documents/
+    DocumentStatusBadge.tsx
+    DocumentUploadForm.tsx
+    DocumentsPanel.tsx
+    DocumentsTable.tsx
+    ReindexButton.tsx
+  layout/
+    MeetingWorkspace.tsx
+  shell/
+    AppShell.tsx
+    ArtifactsRail.tsx
+    MeetingsRail.tsx
+    MobileMeetingsDrawer.tsx
+    TopNav.tsx
+  verify/
+    EvidenceDrawer.tsx
+    IssuesPanel.tsx
+    TasksPanel.tsx
+    VerifyPanel.tsx
 ```
 
-`fetchJson` should always throw `ApiError` so all screens can use one toast/banner pattern.
+## 5) Error and Edge States
 
-## 7.2 React Query Hooks
+- API errors normalized via `ApiError { message, status }`
+- No indexed chunks yet -> explicit indexing state messaging
+- Failed docs -> reindex action visible
+- Empty verify/tasks/issues -> explicit empty-state copy
+- No citations -> warning callout under assistant message
 
-`lib/queries/meetings.ts`
-- `useMeetings()` -> `GET /meetings`
-- `useCreateMeeting()` -> `POST /meetings`
+## 6) What Is Working End-to-End
 
-`lib/queries/documents.ts`
-- `useMeetingDocuments(meetingId)` -> `GET /meetings/{meetingId}/documents`
-- `useCreateDocument(meetingId)` -> `POST /meetings/{meetingId}/documents`
-- `useReindexDocument()` -> `POST /documents/{document_id}/reindex`
+- Create meeting
+- Upload file(s)
+- Observe background indexing status
+- Reindex failed docs
+- Chat against indexed notes
+- Verify extraction (summary, decisions, actions, issues)
+- Switch meetings from rail
 
-`lib/queries/verify.ts`
-- `useVerifyMeeting(meetingId)` -> `POST /meetings/{meetingId}/verify`
+## 7) Next Frontend Steps
 
-`lib/queries/chat.ts`
-- `useChat(meetingId)` -> `POST /meetings/{meetingId}/chat`
+1. Add server-backed chat history endpoint integration (cross-device persistence)
+2. Improve citation UX (show quote snippets inline, de-duplicate repeated chunk chips)
+3. Add route-level `loading.tsx` / `error.tsx` for app and meeting routes
+4. Add document filters/search in docs tab
+5. Add subtle animation system consistency (durations/easings centralized)
 
-## 7.3 Polling Strategy
+## 8) Local Run (Frontend)
 
-Use one poll source per workspace:
-- Poll `GET /meetings/{meeting_id}/documents` every 2s while any doc is `pending/processing`
-- Stop polling when all docs are terminal (`indexed/failed`)
-
-This avoids per-document polling complexity.
-
-## 8) Component/Folder Structure
-
-```txt
-apps/web/
-  src/
-    app/
-      layout.tsx
-      providers.tsx
-      loading.tsx
-      error.tsx
-      page.tsx
-      meetings/
-        [meetingId]/
-          loading.tsx
-          error.tsx
-          page.tsx
-    components/
-      layout/
-        AppShell.tsx
-        TopNav.tsx
-      meetings/
-        CreateMeetingDialog.tsx
-        MeetingsList.tsx
-        MeetingCard.tsx
-      documents/
-        DocumentUploadForm.tsx
-        DocumentsTable.tsx
-        DocumentStatusBadge.tsx
-        IndexingBanner.tsx
-        ReindexButton.tsx
-      verify/
-        VerifyPanel.tsx
-        SummaryCard.tsx
-        DecisionsList.tsx
-        ActionItemsTable.tsx
-        IssuesBoard.tsx
-        EvidenceDrawer.tsx
-      chat/
-        ChatPanel.tsx
-        MessageList.tsx
-        MessageBubble.tsx
-        CitationChips.tsx
-        CitationDrawer.tsx
-        NoEvidenceCallout.tsx
-      shared/
-        ApiErrorBanner.tsx
-        EmptyState.tsx
-        SkeletonBlock.tsx
-    lib/
-      api/
-        client.ts
-        errors.ts
-      queries/
-        meetings.ts
-        documents.ts
-        verify.ts
-        chat.ts
-      state/
-        meetingIndexState.ts
-      schemas/
-        meetings.ts
-        documents.ts
-        verify.ts
-        chat.ts
-      utils/
-        time.ts
-        text.ts
+```bash
+cd apps/web
+npm install
+npm run dev -- --port 3010
 ```
 
-## 9) End-to-End UX Flows
+Set API URL:
 
-## 9.1 Create + Ingest + Ask
-
-```mermaid
-flowchart TD
-  A[Meetings Home] --> B[Create Meeting]
-  B --> C[Open Workspace]
-  C --> D[Submit Document]
-  D --> E[Doc status pending]
-  E --> F[Polling documents list]
-  F --> G{Indexed exists?}
-  G -- No --> H[Show indexing banner]
-  G -- Yes --> I[Enable Verify + Chat]
-  I --> J[User asks question]
-  J --> K[Show answer + citations]
+```bash
+# apps/web/.env.local
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ```
-
-## 9.2 Verify Flow
-
-```mermaid
-flowchart TD
-  A[Verify tab] --> B[Run Verify]
-  B --> C[POST /verify]
-  C --> D[Render summary, decisions, actions, issues]
-  D --> E[Click evidence chip]
-  E --> F[Open evidence drawer]
-```
-
-## 10) Wireframe Preview (Low Fidelity)
-
-Desktop:
-
-```txt
-+--------------------------------------------------------------------------------+
-| TopNav | Meeting: Q1 Planning | Status: PARTIALLY_INDEXED | Last indexed: ... |
-+-------------------------------------------+------------------------------------+
-| Documents                                  | Chat                               |
-| [doc_type] [filename]                      | [message list...]                  |
-| [textarea notes...] [Upload & Index]       |                                    |
-|-------------------------------------------  | [question input........] [Send]    |
-| docs table (status, error, reindex)        | citations chips under each answer  |
-|-------------------------------------------  |                                    |
-| Verify                                     |                                    |
-| [Run Verify]                               |                                    |
-| Summary/Decisions (collapse)               |                                    |
-| Action Items (collapse)                    |                                    |
-| Issues (collapse)                          |                                    |
-+-------------------------------------------+------------------------------------+
-```
-
-Mobile:
-
-```txt
-[TopNav]
-[Meeting title + status]
-[TABS: Documents | Verify | Chat]
-(active tab content)
-```
-
-## 11) Error and Edge-State Design
-
-- API error (`detail`) -> toast + inline `ApiErrorBanner`
-- Queue enqueue failure -> failed badge + error text
-- No citations -> `NoEvidenceCallout` (non-blocking warning)
-- Verify while not indexed -> disabled CTA with helper text
-- `FAILED_ONLY` state -> prominent `Retry indexing` guidance
-- Add `Demo mode` label (no auth yet)
-- Route-level fallbacks required:
-  - `src/app/loading.tsx`, `src/app/error.tsx`
-  - `src/app/meetings/[meetingId]/loading.tsx`, `src/app/meetings/[meetingId]/error.tsx`
-  - No page should fail into blank state on slow/failed network
-
-Evidence drawer contract (shared by Chat and Verify):
-- Desktop: right-side sheet (`side=\"right\"`)
-- Mobile: bottom sheet (`side=\"bottom\"`)
-- Content order:
-  1. `chunk_id`
-  2. `quote`
-  3. copy buttons for both
-- Keep this behavior identical in both `EvidenceDrawer` and `CitationDrawer`.
-
-## 12) Accessibility + Interaction Requirements
-
-- Keyboard navigable dialogs/sheets/tabs (shadcn defaults)
-- Visible focus rings
-- Status badges with text (not color alone)
-- `aria-live="polite"` for indexing status updates
-- Hit-target size >= 40px for mobile actions
-
-## 13) Phased Build Plan
-
-Phase 1: App skeleton + providers
-- Next.js app scaffold
-- Tailwind + shadcn setup
-- React Query provider and toaster
-- Route-level loading/error files for root and meeting routes
-
-Phase 2: Meetings Home
-- list meetings
-- create meeting dialog
-- empty/search states
-
-Phase 3: Documents pipeline UX
-- upload form + docs table
-- polling + derived meeting state
-- reindex button + failure UX
-
-Phase 4: Verify UX
-- run verify
-- collapsible output sections
-- evidence drawer
-
-Phase 5: Chat UX
-- chat composer + streamless responses
-- citations chips/drawer
-- suggested questions + no-evidence callout
-
-Phase 6: Polish
-- responsive refinements
-- skeletons + error handling consistency
-- basic telemetry hooks (optional)
-
-## 14) Done Criteria
-
-- User can complete full workflow from meeting creation to grounded answer.
-- Indexing state is consistent across header/banner/buttons.
-- Verify output is readable and actionable on desktop and mobile.
-- Chat always communicates evidence quality (citations vs no citations).
-- No endpoint assumptions beyond current backend contract.

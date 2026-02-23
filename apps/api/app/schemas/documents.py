@@ -17,11 +17,17 @@ class DocumentCreate(BaseModel):
 class DocumentCreateResponse(BaseModel):
     document_id: str
     status: str
+    original_filename: str | None = None
+    upload_id: str | None = None
 
 
 class DocumentStatusResponse(BaseModel):
     document_id: str
     status: str
+    filename: str | None = None
+    original_filename: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
     error: str | None = None
     processing_started_at: datetime | None = None
     indexed_at: datetime | None = None
@@ -32,6 +38,9 @@ class DocumentListItemResponse(BaseModel):
     meeting_id: str
     doc_type: str
     filename: str | None = None
+    original_filename: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
     status: str
     error: str | None = None
     processing_started_at: datetime | None = None

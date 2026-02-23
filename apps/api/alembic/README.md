@@ -1,29 +1,37 @@
 # Alembic Migrations
 
-Run commands from `apps/api`:
+Run commands from `apps/api`.
+
+## Apply Latest
 
 ```bash
 ./.venv/bin/alembic upgrade head
 ```
 
-If your DB was created before Alembic adoption and tables already exist, do this once first:
+## If DB Already Existed Before Alembic
 
 ```bash
 ./.venv/bin/alembic stamp head
 ```
 
-Create a new migration after model changes:
+## Create New Migration
 
 ```bash
 ./.venv/bin/alembic revision --autogenerate -m "describe change"
 ```
 
-Apply one step down (rollback):
+## Roll Back One Revision
 
 ```bash
 ./.venv/bin/alembic downgrade -1
 ```
 
+## Current Revisions
+
+- `20260222_0001_initial_schema`
+- `20260222_0002_runs_response_json`
+- `20260223_0003_documents_file_metadata`
+
 Notes:
-- `DATABASE_URL` is read from env (`.env`).
-- `pgvector` extension is created in the baseline migration.
+- `DATABASE_URL` comes from env.
+- `pgvector` extension is created in baseline migration.

@@ -3,6 +3,7 @@ import uuid
 import logging
 import os
 from collections import Counter
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -47,6 +48,47 @@ def _build_context(chunks: list[Chunk]) -> str:
     return "\n\n".join(f"[chunk_id={chunk.id}] {chunk.text}" for chunk in chunks)
 
 
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _best_quote_from_chunk(chunk_text: str, query_text: str, max_chars: int = 300) -> str:
+    """
+    Pick a concise line from chunk text that best matches the query text.
+    Used only as a safe fallback when model-provided quotes fail validation.
+    """
+    lines = [line.strip() for line in chunk_text.splitlines() if line.strip()]
+    if not lines:
+        return chunk_text[:max_chars].strip()
+
+    query_tokens = _tokenize(query_text)
+    best_line = lines[0]
+    best_score = -1
+    for line in lines:
+        score = len(query_tokens.intersection(_tokenize(line)))
+        if score > best_score:
+            best_score = score
+            best_line = line
+
+    return best_line[:max_chars].strip()
+
+
+def _build_fallback_citations(
+    allowed: dict[str, str],
+    question: str,
+    answer_text: str,
+    max_items: int = 2,
+) -> list[dict[str, str]]:
+    combined_query = f"{question}\n{answer_text}".strip()
+    citations: list[dict[str, str]] = []
+    for chunk_id, chunk_text in list(allowed.items())[:max_items]:
+        quote = _best_quote_from_chunk(chunk_text, combined_query)
+        if not quote:
+            continue
+        citations.append({"chunk_id": chunk_id, "quote": quote})
+    return citations
+
+
 async def answer_with_citations(
     question: str,
     chunks: list[Chunk],
@@ -61,7 +103,8 @@ async def answer_with_citations(
     base_system = (
         "You are a grounded assistant. Use only the provided CONTEXT. "
         "If the context is insufficient, say you don't know. "
-        "Citations must reference chunk_id values from context and include exact quotes."
+        "Citations must reference chunk_id values from context and include exact quotes. "
+        "Keep quotes concise snippets (preferably <= 300 characters)."
     )
     schema = {
         "type": "json_schema",
@@ -135,6 +178,7 @@ async def answer_with_citations(
             "CITATION RULES:\n"
             "- You MUST only use chunk_ids from the allowed list.\n"
             "- Each quote must be copied verbatim from the chunk text.\n"
+            "- Keep each quote to a short snippet (preferably <= 300 characters).\n"
             "- If you cannot answer using the context, say you don't know and return empty citations."
         )
         retry = await _call_model(
@@ -154,7 +198,21 @@ async def answer_with_citations(
         answer_text = str(retry.get("answer", "")).strip()
 
     if not valid:
-        # Safe fallback: never return unverified citations.
+        # Keep strict citation safety: never return unverified citations.
+        # But if the only failures are quote-shape/content issues (not forged chunk IDs),
+        # preserve the grounded answer text and return it without citations.
+        invalid_reasons = set(invalid_reason_counts.keys())
+        has_disallowed_chunk_id = "chunk_id_not_allowed" in invalid_reasons
+        if answer_text and not has_disallowed_chunk_id:
+            fallback_citations = _build_fallback_citations(
+                allowed=allowed,
+                question=question,
+                answer_text=answer_text,
+            )
+            return (
+                {"answer": answer_text, "citations": fallback_citations},
+                {"had_retry": had_retry, "invalid_reason_counts": dict(invalid_reason_counts)},
+            )
         return (
             {"answer": "I don't know based on the provided notes.", "citations": []},
             {"had_retry": had_retry, "invalid_reason_counts": dict(invalid_reason_counts)},

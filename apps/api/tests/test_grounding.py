@@ -29,7 +29,7 @@ class GroundingValidationTests(unittest.TestCase):
         self.assertEqual(invalid[0]["reason"], "missing_quote")
 
     def test_quote_too_long_rejected(self) -> None:
-        long_quote = "x" * 201
+        long_quote = "x" * 2001
         citations = [{"chunk_id": "chunk-1", "quote": long_quote}]
         valid, invalid = validate_citations(citations, self.chunk_text_by_id)
         self.assertEqual(valid, [])
