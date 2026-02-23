@@ -445,13 +445,10 @@ async def verify_endpoint(meeting_id: uuid.UUID, db: AsyncSession = Depends(get_
     if not meeting:
         raise HTTPException(status_code=404, detail="meeting not found")
 
-    # Step 6.3: run extraction + grounding + rule checks.
-    verify_response, meta = await verify_meeting(db=db, meeting_id=meeting_id)
-    if (
-        not meta.get("retrieved_chunk_ids")
-        and await _meeting_indexing_in_progress(db, meeting_id)
-        and not await _meeting_has_indexed_chunks(db, meeting_id)
-    ):
+    # Short-circuit when meeting content is not ready yet to avoid unnecessary model calls.
+    indexing_in_progress = await _meeting_indexing_in_progress(db, meeting_id)
+    has_indexed_chunks = await _meeting_has_indexed_chunks(db, meeting_id)
+    if indexing_in_progress and not has_indexed_chunks:
         verify_response = VerifyResponse(
             structured_summary="This meeting is still being indexed. Try again in a moment.",
             decisions=[],
@@ -473,6 +470,56 @@ async def verify_endpoint(meeting_id: uuid.UUID, db: AsyncSession = Depends(get_
             "retrieved_chunk_ids": [],
             "model": "gpt-4.1-mini",
         }
+    elif not has_indexed_chunks:
+        verify_response = VerifyResponse(
+            structured_summary="No indexed meeting content is available to verify.",
+            decisions=[],
+            action_items=[],
+            open_questions=[],
+            issues=[
+                Issue(
+                    type="missing_context",
+                    description="No indexed chunks found for this meeting.",
+                    evidence_chunk_ids=[],
+                )
+            ],
+            had_retry=False,
+            invalid_reason_counts={},
+        )
+        meta = {
+            "had_retry": False,
+            "invalid_reason_counts": {},
+            "retrieved_chunk_ids": [],
+            "model": "gpt-4.1-mini",
+        }
+    else:
+        try:
+            # Step 6.3: run extraction + grounding + rule checks.
+            verify_response, meta = await verify_meeting(db=db, meeting_id=meeting_id)
+        except Exception:
+            # Fail-safe behavior: verification errors should not surface as raw 500s.
+            logger.exception("verify engine failed meeting_id=%s", meeting_id)
+            verify_response = VerifyResponse(
+                structured_summary="Unable to verify this meeting right now. Please try again.",
+                decisions=[],
+                action_items=[],
+                open_questions=[],
+                issues=[
+                    Issue(
+                        type="other",
+                        description="Verifier engine failed unexpectedly.",
+                        evidence_chunk_ids=[],
+                    )
+                ],
+                had_retry=False,
+                invalid_reason_counts={},
+            )
+            meta = {
+                "had_retry": False,
+                "invalid_reason_counts": {},
+                "retrieved_chunk_ids": [],
+                "model": "gpt-4.1-mini",
+            }
 
     try:
         # Step 6.3: best-effort run logging (endpoint response should not fail if logging fails).

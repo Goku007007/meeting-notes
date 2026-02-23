@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 from collections import Counter
+from copy import deepcopy
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -130,7 +131,50 @@ def _apply_rule_based_checks(result: VerifyResponse) -> None:
     result.issues = _dedupe_issues(result.issues + generated)
 
 
+def _to_openai_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """
+    OpenAI strict json_schema requires object schemas to explicitly set:
+    - additionalProperties: false
+    - required: [all properties]
+    We normalize the Pydantic schema recursively to satisfy that contract.
+    """
+
+    def transform(node: Any) -> Any:
+        if isinstance(node, dict):
+            transformed = {key: transform(value) for key, value in node.items()}
+            if transformed.get("type") == "object":
+                props = transformed.get("properties")
+                if isinstance(props, dict):
+                    transformed["required"] = list(props.keys())
+                transformed["additionalProperties"] = False
+            return transformed
+        if isinstance(node, list):
+            return [transform(item) for item in node]
+        return node
+
+    return transform(deepcopy(schema))
+
+
+def _build_llm_verify_schema() -> dict[str, Any]:
+    """
+    Build the schema sent to the model.
+    We intentionally exclude local metadata fields that are populated by backend logic.
+    """
+    schema = deepcopy(VerifyResponse.model_json_schema())
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        properties.pop("had_retry", None)
+        properties.pop("invalid_reason_counts", None)
+
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [key for key in required if key in properties]
+
+    return _to_openai_strict_json_schema(schema)
+
+
 async def _call_verifier_model(system_prompt: str, user_prompt: str) -> VerifyResponse:
+    strict_schema = _build_llm_verify_schema()
     response = await get_openai_client().responses.create(
         model=VERIFY_MODEL,
         input=[
@@ -141,7 +185,7 @@ async def _call_verifier_model(system_prompt: str, user_prompt: str) -> VerifyRe
             "format": {
                 "type": "json_schema",
                 "name": "verify_response",
-                "schema": VerifyResponse.model_json_schema(),
+                "schema": strict_schema,
                 "strict": True,
             }
         },
