@@ -10,8 +10,11 @@ from app.ai.embeddings import embed_texts
 from app.db.models import Chunk, Document
 from app.db.session import SessionLocal
 from app.ingestion.chunking import chunk_text
+from app.processing import extract_text_from_file
 
 STALE_PROCESSING_MINUTES = int(os.getenv("STALE_PROCESSING_MINUTES", "30"))
+EXTRACTION_TIMEOUT_SECONDS = int(os.getenv("EXTRACTION_TIMEOUT_SECONDS", "120"))
+MAX_EXTRACTED_TEXT_CHARS = int(os.getenv("MAX_EXTRACTED_TEXT_CHARS", str(2_000_000)))
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +48,24 @@ async def index_document_async(document_id: str) -> None:
             previous_ids_result = await db.execute(select(Chunk.id).where(Chunk.document_id == doc.id))
             previous_chunk_ids = [row[0] for row in previous_ids_result.all()]
 
+            # File-uploaded docs may not have raw_text yet; extract it in worker.
+            if not doc.raw_text.strip():
+                if not doc.storage_path:
+                    raise ValueError("document has no raw_text and no storage_path for extraction")
+                # Run extraction in a thread with timeout so one bad file cannot stall a worker.
+                doc.raw_text = await asyncio.wait_for(
+                    asyncio.to_thread(extract_text_from_file, doc.storage_path, doc.mime_type),
+                    timeout=EXTRACTION_TIMEOUT_SECONDS,
+                )
+
+            if len(doc.raw_text) > MAX_EXTRACTED_TEXT_CHARS:
+                raise ValueError(
+                    f"extracted text exceeds limit ({MAX_EXTRACTED_TEXT_CHARS} chars)"
+                )
+
             pieces = chunk_text(doc.raw_text)
+            if not pieces:
+                raise ValueError("document produced no chunks after extraction")
             vectors = await embed_texts(pieces) if pieces else []
             if len(vectors) != len(pieces):
                 raise ValueError("embedding count does not match chunk count")
@@ -82,13 +102,20 @@ async def index_document_async(document_id: str) -> None:
                     )
         except Exception as exc:
             await db.rollback()
+            error_message = str(exc).strip()
+            if isinstance(exc, asyncio.TimeoutError):
+                error_message = (
+                    f"extraction timed out after {EXTRACTION_TIMEOUT_SECONDS} seconds"
+                )
+            if not error_message:
+                error_message = "document processing failed"
 
             # Best effort: persist failure state so UI/users can see what happened.
             result = await db.execute(select(Document).where(Document.id == doc_uuid))
             failed_doc = result.scalar_one_or_none()
             if failed_doc is not None:
                 failed_doc.status = "failed"
-                failed_doc.error = str(exc)[:4000]
+                failed_doc.error = error_message[:4000]
                 failed_doc.processing_started_at = None
                 failed_doc.indexed_at = None
                 await db.commit()

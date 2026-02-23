@@ -1,10 +1,14 @@
 from fastapi import Depends
+from fastapi import File
 from fastapi import FastAPI
+from fastapi import Form
 from fastapi import Header
 from fastapi import HTTPException
+from fastapi import UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
+from pathlib import Path
 import time
 import uuid
 
@@ -18,6 +22,7 @@ from app.db.deps import get_db
 from app.db.models import Chunk, Document, Meeting
 from app.db.session import engine
 from app.observability.runs import log_chat_run, log_verify_run
+from app.processing import UnsupportedFormatError, validate_supported_upload
 from app.schemas.documents import (
     DocumentCreate,
     DocumentCreateResponse,
@@ -36,6 +41,10 @@ load_dotenv()
 app = FastAPI()
 logger = logging.getLogger(__name__)
 DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").strip().lower() in {"1", "true", "yes", "on"}
+UPLOADS_ROOT = Path(
+    os.getenv("UPLOADS_DIR", str(Path(__file__).resolve().parents[3] / "uploads"))
+)
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 
 # Allow the local frontend app to call the API during development.
 app.add_middleware(
@@ -70,14 +79,17 @@ async def create_meeting(title: str, db: AsyncSession = Depends(get_db)):
     db.add(meeting)
     await db.commit()
     await db.refresh(meeting) #pulls generated fields like id back from DB
-    return {"id": str(meeting.id), "title": meeting.title}
+    return {"id": str(meeting.id), "title": meeting.title, "created_at": meeting.created_at}
 
 
 @app.get("/meetings", response_model=list[MeetingResponse])
 async def list_meetings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Meeting).order_by(Meeting.created_at.desc()))
     meetings = result.scalars().all()
-    return [{"id": str(meeting.id), "title": meeting.title} for meeting in meetings]
+    return [
+        {"id": str(meeting.id), "title": meeting.title, "created_at": meeting.created_at}
+        for meeting in meetings
+    ]
 
 
 @app.get("/meetings/{meeting_id}", response_model=MeetingResponse)
@@ -86,7 +98,7 @@ async def get_meeting(meeting_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     meeting = result.scalar_one_or_none()
     if not meeting:
         raise HTTPException(status_code=404, detail="meeting not found")
-    return{"id": str(meeting.id),"title":meeting.title}
+    return {"id": str(meeting.id), "title": meeting.title, "created_at": meeting.created_at}
 
 
 
@@ -132,6 +144,98 @@ async def create_document(meeting_id: uuid.UUID, payload: DocumentCreate, db: As
         raise
 
 
+@app.post("/meetings/{meeting_id}/documents/upload", response_model=DocumentCreateResponse)
+async def upload_document(
+    meeting_id: uuid.UUID,
+    doc_type: str = Form(...),
+    file: UploadFile = File(...),
+    filename: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Multipart upload endpoint (file-in pipeline).
+    Stores the raw file, creates a pending Document row, then enqueues background processing.
+    """
+    result = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+    meeting = result.scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="meeting not found")
+
+    normalized_doc_type = doc_type.strip()
+    if not normalized_doc_type:
+        raise HTTPException(status_code=400, detail="doc_type is required")
+    if len(normalized_doc_type) > 50:
+        raise HTTPException(status_code=400, detail="doc_type must be 50 characters or less")
+
+    try:
+        # Enforce a strict file-type allowlist at the edge.
+        validate_supported_upload(file.filename, file.content_type)
+    except UnsupportedFormatError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+    content = await file.read()
+    await file.close()
+    if not content:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large; max allowed is {MAX_UPLOAD_BYTES} bytes",
+        )
+
+    document_id = uuid.uuid4()
+    original_filename = Path(file.filename or "upload.bin").name
+    normalized_filename = Path(filename).name if filename else original_filename
+    mime_type = (file.content_type or "").strip() or None
+    size_bytes = len(content)
+
+    doc_dir = UPLOADS_ROOT / str(document_id)
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = doc_dir / original_filename
+    storage_path.write_bytes(content)
+
+    doc = Document(
+        id=document_id,
+        meeting_id=meeting_id,
+        doc_type=normalized_doc_type,
+        filename=normalized_filename,
+        original_filename=original_filename,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        storage_path=str(storage_path),
+        raw_text="",
+        status="pending",
+        error=None,
+        processing_started_at=None,
+        indexed_at=None,
+    )
+    db.add(doc)
+
+    try:
+        await db.commit()
+        await db.refresh(doc)
+
+        try:
+            enqueue_index_document(str(doc.id))
+        except Exception as queue_exc:
+            doc.status = "failed"
+            doc.error = f"queue failed: {queue_exc}"[:4000]
+            await db.commit()
+            raise HTTPException(status_code=500, detail="failed to enqueue indexing job")
+
+        return DocumentCreateResponse(document_id=str(doc.id), status=doc.status)
+    except Exception:
+        await db.rollback()
+        try:
+            if storage_path.exists():
+                storage_path.unlink()
+            if doc_dir.exists() and not any(doc_dir.iterdir()):
+                doc_dir.rmdir()
+        except Exception:
+            logger.exception("failed to clean up uploaded file after create failure")
+        raise
+
+
 @app.get("/meetings/{meeting_id}/documents", response_model=list[DocumentListItemResponse])
 async def list_meeting_documents(meeting_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
@@ -149,6 +253,9 @@ async def list_meeting_documents(meeting_id: uuid.UUID, db: AsyncSession = Depen
             meeting_id=str(doc.meeting_id),
             doc_type=doc.doc_type,
             filename=doc.filename,
+            original_filename=doc.original_filename,
+            mime_type=doc.mime_type,
+            size_bytes=doc.size_bytes,
             status=doc.status,
             error=doc.error,
             processing_started_at=doc.processing_started_at,
@@ -188,6 +295,10 @@ async def get_document_status(document_id: uuid.UUID, db: AsyncSession = Depends
     return DocumentStatusResponse(
         document_id=str(doc.id),
         status=doc.status,
+        filename=doc.filename,
+        original_filename=doc.original_filename,
+        mime_type=doc.mime_type,
+        size_bytes=doc.size_bytes,
         error=doc.error,
         processing_started_at=doc.processing_started_at,
         indexed_at=doc.indexed_at,

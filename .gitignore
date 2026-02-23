@@ -1,9 +1,11 @@
 .env
 *.env
 apps/api/.env
+apps/web/.env.local
 
 .venv/
 apps/api/.venv/
 
 __pycache__/
 *.py[cod]
+uploads/

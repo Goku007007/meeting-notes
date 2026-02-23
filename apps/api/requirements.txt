@@ -6,6 +6,12 @@ greenlet
 openai==2.21.0
 pgvector==0.4.2
 python-dotenv==1.2.1
+python-multipart
+pypdf
+python-docx
+python-pptx
+openpyxl
+beautifulsoup4
 redis
 rq
 alembic
