@@ -52,6 +52,11 @@ class IndexingReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reindex_moves_failed_doc_to_pending_and_enqueues(self) -> None:
         doc = await self._create_document(status="failed")
+        # Reindex now has cooldown protection based on created/indexed/processing timestamps.
+        # Backdate created_at so this test validates enqueue behavior, not cooldown rejection.
+        doc.created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        await self.db.commit()
+        await self.db.refresh(doc)
 
         called: list[str] = []
         with patch("app.main.enqueue_index_document", lambda doc_id: called.append(doc_id) or "queued"):
