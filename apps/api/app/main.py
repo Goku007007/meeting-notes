@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import ipaddress
 from fastapi import Depends
 from fastapi import File
 from fastapi import FastAPI
@@ -103,6 +104,15 @@ CORS_ALLOW_ORIGIN_REGEX = os.getenv(
     "CORS_ALLOW_ORIGIN_REGEX",
     r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
 )
+TRUSTED_PROXY_CIDRS = [
+    value.strip()
+    for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",")
+    if value.strip()
+]
+SECURITY_HSTS = os.getenv(
+    "SECURITY_HSTS",
+    "max-age=31536000; includeSubDomains" if APP_ENV in {"production", "staging"} else "",
+).strip()
 if APP_ENV in {"production", "staging"}:
     if any(origin == "*" for origin in CORS_ALLOW_ORIGINS):
         raise RuntimeError("Wildcard CORS origins are not allowed outside development.")
@@ -128,6 +138,8 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Content-Security-Policy", SECURITY_CSP)
+    if SECURITY_HSTS and request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", SECURITY_HSTS)
     return response
 
 
@@ -263,10 +275,39 @@ def get_queue_for_health():
 
 
 def _client_ip(request: Request) -> str | None:
+    direct_ip = request.client.host if request.client else None
+    if not _is_trusted_proxy(direct_ip):
+        return direct_ip
+
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else None
+        for value in forwarded_for.split(","):
+            candidate = value.strip()
+            try:
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                continue
+    return direct_ip
+
+
+def _is_trusted_proxy(client_ip: str | None) -> bool:
+    if not client_ip or not TRUSTED_PROXY_CIDRS:
+        return False
+    try:
+        parsed_ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+
+    for cidr in TRUSTED_PROXY_CIDRS:
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            logger.warning("Ignoring invalid TRUSTED_PROXY_CIDRS entry: %s", cidr)
+            continue
+        if parsed_ip in network:
+            return True
+    return False
 
 
 async def _get_owned_meeting_or_404(
@@ -313,7 +354,7 @@ def _require_admin_token(x_admin_token: str | None) -> None:
                 "message": "Admin API token is not configured.",
             },
         )
-    if (x_admin_token or "").strip() != ADMIN_API_TOKEN:
+    if not secrets.compare_digest((x_admin_token or "").strip(), ADMIN_API_TOKEN):
         raise HTTPException(
             status_code=401,
             detail={"code": "invalid_admin_token", "message": "Invalid admin token."},

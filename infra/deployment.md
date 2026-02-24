@@ -54,8 +54,12 @@ Logging/privacy:
 
 Trusted proxy / client IP:
 - Only trust `X-Forwarded-For` when deployed behind a known, configured trusted proxy chain.
+- Configure trusted proxy CIDRs via `TRUSTED_PROXY_CIDRS` (comma-separated CIDR list).
 - If trusted proxy settings are not configured, use `request.client.host` for abuse controls and rate limiting.
 - Never blindly trust arbitrary `X-Forwarded-For` headers from direct internet traffic.
+
+Transport security:
+- Set `SECURITY_HSTS` in staging/production (recommended: `max-age=31536000; includeSubDomains`) behind HTTPS.
 
 ## Timeouts and Concurrency
 
