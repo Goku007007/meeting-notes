@@ -159,3 +159,27 @@ docker compose down
 - Base deployment notes: `infra/deployment.md`
 - API contract: `backendap.md`
 - Web local run notes: `apps/web/README.md`
+
+## 8) GitHub Auto-Deploy Setup
+
+This repo includes `.github/workflows/deploy.yml`:
+- triggers on every push to `main`
+- can also be run manually from GitHub Actions (`workflow_dispatch`)
+- sends deploy-hook POSTs for API, worker, and web
+- runs API post-deploy health checks when `PROD_API_BASE_URL` is configured
+
+Set these GitHub repository secrets in:
+`Settings -> Secrets and variables -> Actions -> New repository secret`
+
+Required:
+- `API_DEPLOY_HOOK_URL`
+- `WORKER_DEPLOY_HOOK_URL`
+- `WEB_DEPLOY_HOOK_URL`
+
+Optional (recommended):
+- `PROD_API_BASE_URL` (example: `https://api.yourdomain.com`)
+
+Notes:
+- Deploy hooks are available on platforms like Vercel/Render/Railway/Fly (service-dependent).
+- Keep hooks secret; they are effectively deploy credentials.
+- If any required deploy-hook secret is missing, the deploy workflow fails fast.

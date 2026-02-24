@@ -1,0 +1,78 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_health_checks:
+        description: "Run post-deploy health checks"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate deploy secrets
+        env:
+          API_DEPLOY_HOOK_URL: ${{ secrets.API_DEPLOY_HOOK_URL }}
+          WORKER_DEPLOY_HOOK_URL: ${{ secrets.WORKER_DEPLOY_HOOK_URL }}
+          WEB_DEPLOY_HOOK_URL: ${{ secrets.WEB_DEPLOY_HOOK_URL }}
+        run: |
+          missing=0
+          for key in API_DEPLOY_HOOK_URL WORKER_DEPLOY_HOOK_URL WEB_DEPLOY_HOOK_URL; do
+            if [ -z "${!key}" ]; then
+              echo "::error ::Missing required secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Trigger API deploy
+        env:
+          API_DEPLOY_HOOK_URL: ${{ secrets.API_DEPLOY_HOOK_URL }}
+        run: |
+          curl --fail --show-error --silent -X POST "$API_DEPLOY_HOOK_URL"
+          echo "API deploy trigger sent."
+
+      - name: Trigger worker deploy
+        env:
+          WORKER_DEPLOY_HOOK_URL: ${{ secrets.WORKER_DEPLOY_HOOK_URL }}
+        run: |
+          curl --fail --show-error --silent -X POST "$WORKER_DEPLOY_HOOK_URL"
+          echo "Worker deploy trigger sent."
+
+      - name: Trigger web deploy
+        env:
+          WEB_DEPLOY_HOOK_URL: ${{ secrets.WEB_DEPLOY_HOOK_URL }}
+        run: |
+          curl --fail --show-error --silent -X POST "$WEB_DEPLOY_HOOK_URL"
+          echo "Web deploy trigger sent."
+
+      - name: Wait for rollout window
+        run: sleep 45
+
+      - name: Post-deploy API health checks
+        if: ${{ (github.event_name == 'push' || github.event.inputs.run_health_checks == 'true') && secrets.PROD_API_BASE_URL != '' }}
+        env:
+          PROD_API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
+        run: |
+          curl --fail --show-error --silent "$PROD_API_BASE_URL/health" >/dev/null
+          curl --fail --show-error --silent "$PROD_API_BASE_URL/health/ready" >/dev/null
+          curl --fail --show-error --silent "$PROD_API_BASE_URL/health/worker" >/dev/null
+          echo "Post-deploy health checks passed."
