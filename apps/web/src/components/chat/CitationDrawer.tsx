@@ -20,24 +20,24 @@ export function CitationDrawer({ citation, onOpenChange }: CitationDrawerProps) 
 
   return (
     <Dialog open={Boolean(citation)} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="border-slate-200 bg-[#f8fbfb]">
         <DialogHeader>
           <DialogTitle>Citation</DialogTitle>
           <DialogDescription>Chunk {citation?.chunk_id}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-sm">
           <div>
-            <p className="mb-1 text-xs font-medium text-muted-foreground">Quoted snippet</p>
-            <p className="whitespace-pre-wrap rounded-md border bg-muted/30 p-2">{citation?.quote}</p>
+            <p className="mb-1 text-xs font-medium text-slate-500">Quoted snippet</p>
+            <p className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-2">{citation?.quote}</p>
           </div>
           <div>
-            <p className="mb-1 text-xs font-medium text-muted-foreground">Source chunk text</p>
+            <p className="mb-1 text-xs font-medium text-slate-500">Source chunk text</p>
             {chunkQuery.isLoading ? (
-              <p className="text-xs text-muted-foreground">Loading chunk...</p>
+              <p className="text-xs text-slate-500">Loading chunk...</p>
             ) : chunkQuery.isError ? (
               <p className="text-xs text-red-600">Failed to load chunk details.</p>
             ) : (
-              <p className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border p-2">
+              <p className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-2">
                 {chunkQuery.data?.text ?? "No chunk text available."}
               </p>
             )}

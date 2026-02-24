@@ -23,10 +23,10 @@ export function VerifyPanel({ meetingId, indexState }: VerifyPanelProps) {
   const [lastRunAt, setLastRunAt] = useState<string | null>(null);
 
   return (
-    <Card>
+    <Card className="rounded-2xl border border-slate-200/90 bg-white/90 py-4 shadow-sm">
       <CardHeader>
-        <CardTitle>Verify</CardTitle>
-        <CardDescription>
+        <CardTitle className="text-3xl tracking-tight text-slate-900">Verify</CardTitle>
+        <CardDescription className="text-base text-slate-500">
           Extract decisions, action items, and issues with evidence.
         </CardDescription>
       </CardHeader>
@@ -47,16 +47,17 @@ export function VerifyPanel({ meetingId, indexState }: VerifyPanelProps) {
               }
             }}
             disabled={!canRunVerify(indexState) || verifyMutation.isPending}
+            className="rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 disabled:bg-emerald-200 disabled:text-emerald-700 disabled:opacity-100"
           >
             {verifyMutation.isPending ? "Running..." : "Run Verify"}
           </Button>
           {lastRunAt ? (
-            <span className="text-xs text-muted-foreground">Last run: {lastRunAt}</span>
+            <span className="text-xs text-slate-500">Last run: {lastRunAt}</span>
           ) : null}
         </div>
 
         {!canRunVerify(indexState) ? (
-          <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
             Verify is enabled after at least one document is indexed.
           </p>
         ) : null}
@@ -65,7 +66,7 @@ export function VerifyPanel({ meetingId, indexState }: VerifyPanelProps) {
           <div className="space-y-3 text-sm">
             <details open>
               <summary className="cursor-pointer font-medium">Summary & Decisions</summary>
-              <p className="mt-2 whitespace-pre-wrap rounded-md border p-3">
+              <p className="mt-2 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                 {verifyResult.structured_summary}
               </p>
               {verifyResult.decisions.length > 0 ? (
@@ -75,12 +76,12 @@ export function VerifyPanel({ meetingId, indexState }: VerifyPanelProps) {
                   ))}
                 </ul>
               ) : (
-                <p className="mt-2 text-muted-foreground">No decisions extracted.</p>
+                <p className="mt-2 text-slate-500">No decisions extracted.</p>
               )}
             </details>
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-slate-500">
             Run verify to generate structured artifacts from indexed notes.
           </p>
         )}

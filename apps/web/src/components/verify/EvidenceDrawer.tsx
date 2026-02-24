@@ -20,19 +20,19 @@ export function EvidenceDrawer({ evidenceId, quote, onOpenChange }: EvidenceDraw
 
   return (
     <Dialog open={Boolean(evidenceId)} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="border-slate-200 bg-[#f8fbfb]">
         <DialogHeader>
           <DialogTitle>Evidence</DialogTitle>
           <DialogDescription>Chunk {evidenceId}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-sm">
-          <p className="whitespace-pre-wrap rounded-md border bg-muted/30 p-2">
+          <p className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-2">
             {quote ?? "No quote available."}
           </p>
-          {chunkQuery.isLoading ? <p className="text-xs text-muted-foreground">Loading chunk...</p> : null}
+          {chunkQuery.isLoading ? <p className="text-xs text-slate-500">Loading chunk...</p> : null}
           {chunkQuery.isError ? <p className="text-xs text-red-600">Failed to load chunk details.</p> : null}
           {chunkQuery.data ? (
-            <p className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border p-2">
+            <p className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-2">
               {chunkQuery.data.text}
             </p>
           ) : null}

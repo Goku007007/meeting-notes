@@ -18,7 +18,7 @@ export default function AppError({
 
   return (
     <main className="p-4 md:p-6">
-      <Card className="max-w-xl border-red-200">
+      <Card className="max-w-xl rounded-2xl border-red-200 bg-red-50/90 shadow-sm">
         <CardHeader>
           <CardTitle className="text-red-700">Something went wrong</CardTitle>
           <CardDescription>{error.message || "Unexpected error in app shell."}</CardDescription>

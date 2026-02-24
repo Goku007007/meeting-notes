@@ -19,27 +19,29 @@ function formatDate(value: string | null): string {
 
 export function DocumentsPanel({ meetingId, documents }: DocumentsPanelProps) {
   return (
-    <Card>
+    <Card className="rounded-2xl border border-slate-200/90 bg-white/90 py-4 shadow-sm">
       <CardHeader>
-        <CardTitle>Documents</CardTitle>
-        <CardDescription>Background indexing status and retry actions.</CardDescription>
+        <CardTitle className="text-3xl tracking-tight text-slate-900">Documents</CardTitle>
+        <CardDescription className="text-base text-slate-500">
+          Background indexing status and retry actions.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {documents.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No documents uploaded yet.</p>
+          <p className="text-sm text-slate-500">No documents uploaded yet.</p>
         ) : null}
         {documents.map((doc) => (
-          <div key={doc.document_id} className="space-y-2 rounded-md border p-3">
+          <div key={doc.document_id} className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="max-w-[220px] truncate text-sm font-medium">
                 {doc.filename ?? doc.original_filename ?? doc.document_id}
               </p>
               <DocumentStatusBadge status={doc.status} />
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-500">
               {doc.doc_type} · {doc.mime_type ?? "unknown mime"}
             </p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-500">
               Indexed: {formatDate(doc.indexed_at)}
             </p>
             {doc.error ? (

@@ -18,7 +18,7 @@ export default function MeetingWorkspacePage() {
     return (
       <main className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
         <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-96 w-full" />
+        <Skeleton className="h-96 w-full rounded-2xl" />
       </main>
     );
   }
@@ -31,7 +31,7 @@ export default function MeetingWorkspacePage() {
 
     return (
       <main className="mx-auto max-w-3xl p-4 md:p-6">
-        <Card className="border-red-200">
+        <Card className="rounded-2xl border-red-200 bg-red-50/90 shadow-sm">
           <CardHeader>
             <CardTitle className="text-red-700">Meeting unavailable</CardTitle>
             <CardDescription>{message}</CardDescription>
@@ -49,5 +49,11 @@ export default function MeetingWorkspacePage() {
     );
   }
 
-  return <MeetingWorkspace meetingId={meetingId} />;
+  return (
+    <MeetingWorkspace
+      meetingId={meetingId}
+      meetingTitle={meetingQuery.data.title}
+      meetingCreatedAt={meetingQuery.data.created_at}
+    />
+  );
 }

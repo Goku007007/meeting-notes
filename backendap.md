@@ -408,8 +408,13 @@ Queue behavior (`app/queue.py`):
 Worker command:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/rq worker default --url redis://localhost:6379/0 --with-scheduler
+cd apps/api
+./scripts/run_worker_local.sh
 ```
+
+Notes:
+- On macOS, the script defaults to `rq.worker.SimpleWorker` to avoid Objective-C fork crashes.
+- To force normal forking behavior: `RQ_WORKER_CLASS=rq.worker.Worker ./scripts/run_worker_local.sh`
 
 ## 8) Migrations
 

@@ -16,14 +16,20 @@ type TopNavProps = {
 
 export function TopNav({ isMeetingRoute, meetingTitle, indexState, onOpenMeetings }: TopNavProps) {
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-slate-200/85 bg-[#f6fbfa]">
       <div className="mx-auto flex h-14 w-full max-w-[1700px] items-center justify-between px-4">
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" size="icon" className="lg:hidden" onClick={onOpenMeetings}>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="border-slate-300 bg-white lg:hidden"
+            onClick={onOpenMeetings}
+          >
             <Menu className="h-4 w-4" />
             <span className="sr-only">Open meetings</span>
           </Button>
-          <Button asChild variant="ghost" className="px-2">
+          <Button asChild variant="ghost" className="px-2 text-base font-semibold tracking-tight text-slate-900">
             <Link href="/workspace">meeting-notes</Link>
           </Button>
         </div>
@@ -31,11 +37,19 @@ export function TopNav({ isMeetingRoute, meetingTitle, indexState, onOpenMeeting
         <div className="flex items-center gap-2">
           {isMeetingRoute ? (
             <>
-              <span className="max-w-[260px] truncate text-sm font-medium">{meetingTitle ?? "Meeting"}</span>
-              {indexState ? <Badge variant="secondary">{indexState}</Badge> : null}
+              <span className="max-w-[260px] truncate text-sm font-semibold text-slate-700">
+                {meetingTitle ?? "Meeting"}
+              </span>
+              {indexState ? (
+                <Badge className="rounded-full border border-emerald-200 bg-emerald-100 text-emerald-700" variant="secondary">
+                  {indexState}
+                </Badge>
+              ) : null}
             </>
           ) : (
-            <Badge variant="outline">Guest Mode</Badge>
+            <Badge variant="outline" className="rounded-full border-slate-300 bg-white text-slate-600">
+              Guest Mode
+            </Badge>
           )}
         </div>
       </div>

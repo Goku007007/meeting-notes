@@ -31,7 +31,7 @@ export function AttachmentChips({
   if (!hasAny) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2">
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2">
       {pendingUploads.map((upload) => (
         <Badge
           key={upload.id}
@@ -53,7 +53,11 @@ export function AttachmentChips({
       ))}
 
       {attachedDocuments.map((doc) => (
-        <Badge key={doc.document_id} variant="outline" className="gap-2 bg-background transition-all duration-300">
+        <Badge
+          key={doc.document_id}
+          variant="outline"
+          className="gap-2 rounded-full border-slate-200 bg-white transition-all duration-300"
+        >
           <span className="max-w-[180px] truncate">{doc.filename ?? doc.original_filename ?? doc.document_id}</span>
           <DocumentStatusBadge status={doc.status} />
           {doc.status === "failed" ? (

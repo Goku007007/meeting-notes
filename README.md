@@ -126,12 +126,12 @@ cd apps/api
 
 ```bash
 cd apps/api
-export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-set -a
-source .env
-set +a
-PYTHONPATH=. ./.venv/bin/rq worker default --url redis://localhost:6379/0 --with-scheduler
+./scripts/run_worker_local.sh
 ```
+
+Notes:
+- On macOS, this script uses `rq.worker.SimpleWorker` by default to avoid Objective-C fork crashes.
+- To force regular forking worker behavior: `RQ_WORKER_CLASS=rq.worker.Worker ./scripts/run_worker_local.sh`
 
 ## 5) Frontend setup + run
 
@@ -177,6 +177,7 @@ curl -s -X POST "$API/meetings/$MEETING_ID/verify" -H "$AUTH"
 - Alembic usage: `apps/api/alembic/README.md`
 - Web app local run: `apps/web/README.md`
 - Deployment/env profiles: `infra/deployment.md`
+- Deploy + maintain + run-all guide: `infra/deploy-maintain-runbook.md`
 
 ## Notes
 
