@@ -2,6 +2,43 @@
 
 Meeting intelligence app with a FastAPI backend + Next.js frontend.
 
+Live demo: `https://meetingnotes.xyz/`
+
+## Why this project
+
+`meeting-notes` turns long meeting documents into:
+- grounded Q&A with citation-backed answers
+- structured decisions, action items, and issues
+- a persistent meeting workspace that survives refreshes
+
+This project focuses on practical RAG reliability:
+- deterministic citation generation
+- strict verify output guardrails
+- queue-based ingestion and indexing
+- abuse controls (rate limits + quotas)
+
+## Screenshots
+
+### Landing: Hero
+
+![Landing Hero](docs/images/landing-hero.png)
+
+### Landing: Capabilities
+
+![Landing Capabilities](docs/images/landing-capabilities.png)
+
+### Landing: How It Works
+
+![Landing How It Works](docs/images/landing-how-it-works.png)
+
+### App: Workspace Home
+
+![App Workspace Home](docs/images/app-workspace-home.png)
+
+### App: Meeting Workspace
+
+![App Meeting Workspace](docs/images/app-workspace-meeting.png)
+
 Current capabilities:
 - Guest session auth + meeting ownership scoping
 - Meeting creation and listing

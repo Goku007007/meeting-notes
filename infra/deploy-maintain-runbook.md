@@ -108,14 +108,14 @@ Use 4 terminals.
 
 Terminal 1: infra services
 ```bash
-cd /Users/gokul/Documents/ai-projects/meeting-notes
+cd meeting-notes
 docker compose up -d db redis
 docker compose ps
 ```
 
 Terminal 2: backend API
 ```bash
-cd /Users/gokul/Documents/ai-projects/meeting-notes/apps/api
+cd meeting-notes/apps/api
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 set -a; source .env; set +a
@@ -125,14 +125,14 @@ set -a; source .env; set +a
 
 Terminal 3: worker
 ```bash
-cd /Users/gokul/Documents/ai-projects/meeting-notes/apps/api
+cd meeting-notes/apps/api
 set -a; source .env; set +a
 ./scripts/run_worker_local.sh
 ```
 
 Terminal 4: frontend
 ```bash
-cd /Users/gokul/Documents/ai-projects/meeting-notes/apps/web
+cd meeting-notes/apps/web
 npm install
 npm run dev -- --port 3010
 ```
@@ -155,7 +155,7 @@ Expected:
 Stop processes in API/worker/web terminals with `Ctrl+C`, then:
 
 ```bash
-cd /Users/gokul/Documents/ai-projects/meeting-notes
+cd meeting-notes
 docker compose down
 ```
 
