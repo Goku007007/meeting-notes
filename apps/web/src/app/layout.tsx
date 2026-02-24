@@ -6,6 +6,11 @@ import Providers from "./providers";
 export const metadata: Metadata = {
   title: "Meeting Notes - Decisions & Actions",
   description: "Turn meeting notes into grounded answers, decisions, tasks, and issues.",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({
