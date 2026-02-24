@@ -62,7 +62,7 @@ export function MeetingsRail({ activeMeetingId, onNavigate }: MeetingsRailProps)
     <div className="flex h-full flex-col">
       <div className="space-y-3 border-b p-4">
         <Button asChild variant="outline" className="w-full justify-start">
-          <Link href="/" onClick={onNavigate}>
+          <Link href="/workspace" onClick={onNavigate}>
             Home
           </Link>
         </Button>

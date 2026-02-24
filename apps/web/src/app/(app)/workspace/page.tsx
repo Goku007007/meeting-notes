@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-export default function HomePage() {
+export default function WorkspaceHomePage() {
   return (
     <main className="mx-auto max-w-4xl space-y-6 p-4 md:p-6">
       <Card>

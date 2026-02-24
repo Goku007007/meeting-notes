@@ -41,7 +41,7 @@ export default function MeetingWorkspacePage() {
               Retry
             </Button>
             <Button asChild variant="outline">
-              <Link href="/">Home</Link>
+              <Link href="/workspace">Home</Link>
             </Button>
           </CardContent>
         </Card>

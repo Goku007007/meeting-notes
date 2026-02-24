@@ -24,7 +24,7 @@ export function TopNav({ isMeetingRoute, meetingTitle, indexState, onOpenMeeting
             <span className="sr-only">Open meetings</span>
           </Button>
           <Button asChild variant="ghost" className="px-2">
-            <Link href="/">meeting-notes</Link>
+            <Link href="/workspace">meeting-notes</Link>
           </Button>
         </div>
 
