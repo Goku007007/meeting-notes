@@ -54,7 +54,8 @@ class IndexingReliabilityTests(unittest.IsolatedAsyncioTestCase):
         doc = await self._create_document(status="failed")
         # Reindex now has cooldown protection based on created/indexed/processing timestamps.
         # Backdate created_at so this test validates enqueue behavior, not cooldown rejection.
-        doc.created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        # DB column is TIMESTAMP WITHOUT TIME ZONE; use naive UTC datetime for compatibility.
+        doc.created_at = datetime.utcnow() - timedelta(minutes=10)
         await self.db.commit()
         await self.db.refresh(doc)
 
