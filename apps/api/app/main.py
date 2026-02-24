@@ -94,6 +94,7 @@ REQUIRE_CSRF_FOR_COOKIE_AUTH = os.getenv("REQUIRE_CSRF_FOR_COOKIE_AUTH", "true")
     "on",
 }
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "").strip()
+MIN_ADMIN_API_TOKEN_BYTES = int(os.getenv("MIN_ADMIN_API_TOKEN_BYTES", "32"))
 CORS_ALLOW_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
@@ -119,6 +120,24 @@ if APP_ENV in {"production", "staging"}:
     regex_value = CORS_ALLOW_ORIGIN_REGEX.strip()
     if regex_value and regex_value in {".*", "^.*$"}:
         raise RuntimeError("Wildcard CORS origin regex is not allowed outside development.")
+    weak_admin_tokens = {
+        "changeme",
+        "change-me",
+        "admin",
+        "password",
+        "secret",
+        "token",
+        "test",
+        "demo",
+    }
+    if not ADMIN_API_TOKEN:
+        raise RuntimeError("ADMIN_API_TOKEN must be set in staging/production.")
+    if len(ADMIN_API_TOKEN.encode("utf-8")) < max(16, MIN_ADMIN_API_TOKEN_BYTES):
+        raise RuntimeError(
+            f"ADMIN_API_TOKEN must be at least {max(16, MIN_ADMIN_API_TOKEN_BYTES)} bytes."
+        )
+    if ADMIN_API_TOKEN.strip().lower() in weak_admin_tokens:
+        raise RuntimeError("ADMIN_API_TOKEN is too weak for staging/production.")
 
 # Allow the local frontend app to call the API during development.
 app.add_middleware(

@@ -40,11 +40,13 @@ Minimum critical backend variables:
 - `STORAGE_BACKEND` (`local` or `s3`)
 - `S3_BUCKET` (required when `STORAGE_BACKEND=s3`)
 - `ADMIN_API_TOKEN` (required for admin/ops endpoints)
+- `MIN_ADMIN_API_TOKEN_BYTES` (recommended: `32`)
 
 Operational guidance:
 - never commit real secrets to git
 - rotate keys on schedule and after any leak suspicion
 - keep separate credentials per environment (dev/staging/prod)
+- never place admin tokens in frontend or `NEXT_PUBLIC_*` variables
 
 ## 3) Deployment Checklist
 
@@ -93,7 +95,10 @@ Incident quick actions:
   - check Redis connectivity for queue-related routes
   - verify upstream/OpenAI network availability
 - High OpenAI cost spike:
-  - tighten quotas/rate limits immediately
+  - disable `OPENAI_API_KEY` in hosting secrets immediately
+  - restart API + worker services so the key is no longer usable
+  - rotate to a new key and re-enable only after traffic review
+  - tighten quotas/rate limits before re-enable
   - inspect traffic and job volume for abuse or loops
   - review model usage per endpoint
 

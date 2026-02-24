@@ -61,6 +61,11 @@ Trusted proxy / client IP:
 Transport security:
 - Set `SECURITY_HSTS` in staging/production (recommended: `max-age=31536000; includeSubDomains`) behind HTTPS.
 
+Admin endpoints:
+- `ADMIN_API_TOKEN` is required in staging/production and must be strong (minimum bytes via `MIN_ADMIN_API_TOKEN_BYTES`, default `32`).
+- Never expose admin tokens to frontend code or `NEXT_PUBLIC_*` variables.
+- Keep admin token only in backend/runtime secret stores.
+
 ## Timeouts and Concurrency
 
 API server:

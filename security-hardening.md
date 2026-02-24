@@ -45,13 +45,20 @@ Use in deployment:
 
 This repo includes a dedicated security workflow:
 - `.github/workflows/security.yml`
+- `.github/dependabot.yml` (weekly dependency/security update PRs)
 
 It runs:
 - Python dependency audit (`pip-audit`) for `apps/api`
 - Node dependency audit (`npm audit`) for `apps/web`
 - CodeQL analysis for Python + JavaScript/TypeScript
 
-## 3) Trusted Proxy / Client IP Handling
+## 3) Admin Token Hardening
+
+- Keep `ADMIN_API_TOKEN` only in backend secret stores.
+- Never expose admin token values in frontend code, browser storage, or `NEXT_PUBLIC_*` env vars.
+- Use `MIN_ADMIN_API_TOKEN_BYTES=32` (or stronger).
+- Rotate `ADMIN_API_TOKEN` periodically and after any suspected leak.
+## 4) Trusted Proxy / Client IP Handling
 
 Never trust `X-Forwarded-For` by default.
 
@@ -61,7 +68,15 @@ Only trust it when:
 
 Otherwise, use socket source IP (`request.client.host`) for rate limiting and abuse controls.
 
-## 4) Operational Notes
+## 5) Incident Rule: Disable Key Immediately
+
+If you observe abnormal spend/traffic:
+1. Remove/disable `OPENAI_API_KEY` in hosting secret manager immediately.
+2. Restart API and worker services to drop in-memory credentials.
+3. Verify `/health` is up and AI routes fail closed (no new model calls).
+4. Rotate to a new key only after abuse source review.
+
+## 6) Operational Notes
 
 - Keep rate limiting state in Redis (not in-process memory) for multi-instance correctness.
 - Run workers with CPU/memory limits and non-root user.
