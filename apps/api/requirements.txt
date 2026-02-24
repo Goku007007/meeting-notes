@@ -12,6 +12,10 @@ python-docx
 python-pptx
 openpyxl
 beautifulsoup4
+boto3
+pillow
+pytesseract
+pdf2image
 redis
 rq
 alembic

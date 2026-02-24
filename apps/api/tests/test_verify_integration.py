@@ -1,11 +1,12 @@
 import re
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import select, text
 
-from app.db.models import Base, Chunk, Document, Meeting, Run
+from app.db.models import Base, Chunk, Document, GuestSession, Meeting, Run
 from app.db.session import SessionLocal, engine
 from app.main import verify_endpoint
 from app.schemas.verify import ActionItem, Issue, VerifyResponse
@@ -23,6 +24,11 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.create_all)
             await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS response_json JSONB;"))
         self.db = SessionLocal()
+        self.session = GuestSession(token=f"test-token-{uuid.uuid4()}")
+        self.db.add(self.session)
+        await self.db.commit()
+        await self.db.refresh(self.session)
+        self.request = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
 
     async def asyncTearDown(self) -> None:
         await self.db.rollback()
@@ -30,7 +36,7 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
     async def _create_meeting_with_chunk(self, chunk_text: str) -> tuple[str, str]:
-        meeting = Meeting(title=f"verify-it-{uuid.uuid4()}")
+        meeting = Meeting(title=f"verify-it-{uuid.uuid4()}", session_id=self.session.id)
         self.db.add(meeting)
         await self.db.flush()
 
@@ -89,7 +95,7 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch("app.verifier.engine._call_verifier_model", _mock_call):
-            response = await verify_endpoint(uuid.UUID(meeting_id), self.db)
+            response = await verify_endpoint(uuid.UUID(meeting_id), self.request, self.session, self.db)
 
         issue_types = {issue.type for issue in response.issues}
         self.assertIn("missing_owner", issue_types)
@@ -124,7 +130,7 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch("app.verifier.engine._call_verifier_model", _mock_call):
-            response = await verify_endpoint(uuid.UUID(meeting_id), self.db)
+            response = await verify_endpoint(uuid.UUID(meeting_id), self.request, self.session, self.db)
 
         allowed_ids = {chunk_id}
         for item in response.action_items:
@@ -151,7 +157,7 @@ class VerifyIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch("app.verifier.engine._call_verifier_model", _mock_call):
-            response = await verify_endpoint(uuid.UUID(meeting_id), self.db)
+            response = await verify_endpoint(uuid.UUID(meeting_id), self.request, self.session, self.db)
 
         run = await self._latest_verify_run(meeting_id)
         self.assertEqual(run.run_type, "verify")

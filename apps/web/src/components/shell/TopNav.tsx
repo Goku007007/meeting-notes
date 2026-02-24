@@ -35,7 +35,7 @@ export function TopNav({ isMeetingRoute, meetingTitle, indexState, onOpenMeeting
               {indexState ? <Badge variant="secondary">{indexState}</Badge> : null}
             </>
           ) : (
-            <Badge variant="outline">Demo / No Auth</Badge>
+            <Badge variant="outline">Guest Mode</Badge>
           )}
         </div>
       </div>

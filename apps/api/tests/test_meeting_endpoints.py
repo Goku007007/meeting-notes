@@ -4,7 +4,7 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy import text
 
-from app.db.models import Base, Document, Meeting
+from app.db.models import Base, Document, GuestSession, Meeting
 from app.db.session import SessionLocal, engine
 from app.main import get_meeting, list_meeting_documents, list_meetings
 
@@ -17,6 +17,10 @@ class MeetingEndpointTests(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.create_all)
             await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS response_json JSONB;"))
         self.db = SessionLocal()
+        self.session = GuestSession(token=f"test-token-{uuid.uuid4()}")
+        self.db.add(self.session)
+        await self.db.commit()
+        await self.db.refresh(self.session)
 
     async def asyncTearDown(self) -> None:
         await self.db.rollback()
@@ -24,14 +28,14 @@ class MeetingEndpointTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
     async def test_list_meetings_returns_newest_first(self) -> None:
-        older = Meeting(title=f"older-{uuid.uuid4()}")
-        newer = Meeting(title=f"newer-{uuid.uuid4()}")
+        older = Meeting(title=f"older-{uuid.uuid4()}", session_id=self.session.id)
+        newer = Meeting(title=f"newer-{uuid.uuid4()}", session_id=self.session.id)
         self.db.add(older)
         await self.db.commit()
         self.db.add(newer)
         await self.db.commit()
 
-        rows = await list_meetings(self.db)
+        rows = await list_meetings(self.session, self.db)
         titles = [row["title"] for row in rows]
         self.assertIn(newer.title, titles)
         self.assertIn(older.title, titles)
@@ -39,11 +43,11 @@ class MeetingEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_meeting_returns_404_when_missing(self) -> None:
         with self.assertRaises(HTTPException) as ctx:
-            await get_meeting(uuid.uuid4(), self.db)
+            await get_meeting(uuid.uuid4(), self.session, self.db)
         self.assertEqual(ctx.exception.status_code, 404)
 
     async def test_list_meeting_documents_returns_documents(self) -> None:
-        meeting = Meeting(title=f"docs-{uuid.uuid4()}")
+        meeting = Meeting(title=f"docs-{uuid.uuid4()}", session_id=self.session.id)
         self.db.add(meeting)
         await self.db.flush()
 
@@ -57,7 +61,7 @@ class MeetingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.db.add(doc)
         await self.db.commit()
 
-        docs = await list_meeting_documents(meeting.id, self.db)
+        docs = await list_meeting_documents(meeting.id, self.session, self.db)
         self.assertEqual(len(docs), 1)
         row = docs[0]
         self.assertEqual(row.document_id, str(doc.id))

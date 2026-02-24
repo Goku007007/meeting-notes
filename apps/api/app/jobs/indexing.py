@@ -7,14 +7,17 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, or_, select
 
 from app.ai.embeddings import embed_texts
+from app.auth import cleanup_expired_guest_sessions
 from app.db.models import Chunk, Document
 from app.db.session import SessionLocal
 from app.ingestion.chunking import chunk_text
 from app.processing import extract_text_from_file
+from app.storage import materialize_storage_path
 
 STALE_PROCESSING_MINUTES = int(os.getenv("STALE_PROCESSING_MINUTES", "30"))
 EXTRACTION_TIMEOUT_SECONDS = int(os.getenv("EXTRACTION_TIMEOUT_SECONDS", "120"))
 MAX_EXTRACTED_TEXT_CHARS = int(os.getenv("MAX_EXTRACTED_TEXT_CHARS", str(2_000_000)))
+MAX_CHUNKS_PER_DOCUMENT = int(os.getenv("MAX_CHUNKS_PER_DOCUMENT", "600"))
 logger = logging.getLogger(__name__)
 
 
@@ -53,10 +56,11 @@ async def index_document_async(document_id: str) -> None:
                 if not doc.storage_path:
                     raise ValueError("document has no raw_text and no storage_path for extraction")
                 # Run extraction in a thread with timeout so one bad file cannot stall a worker.
-                doc.raw_text = await asyncio.wait_for(
-                    asyncio.to_thread(extract_text_from_file, doc.storage_path, doc.mime_type),
-                    timeout=EXTRACTION_TIMEOUT_SECONDS,
-                )
+                with materialize_storage_path(doc.storage_path) as local_path:
+                    doc.raw_text = await asyncio.wait_for(
+                        asyncio.to_thread(extract_text_from_file, local_path, doc.mime_type),
+                        timeout=EXTRACTION_TIMEOUT_SECONDS,
+                    )
 
             if len(doc.raw_text) > MAX_EXTRACTED_TEXT_CHARS:
                 raise ValueError(
@@ -66,6 +70,10 @@ async def index_document_async(document_id: str) -> None:
             pieces = chunk_text(doc.raw_text)
             if not pieces:
                 raise ValueError("document produced no chunks after extraction")
+            if MAX_CHUNKS_PER_DOCUMENT > 0 and len(pieces) > MAX_CHUNKS_PER_DOCUMENT:
+                raise ValueError(
+                    f"document produced too many chunks ({len(pieces)} > {MAX_CHUNKS_PER_DOCUMENT})"
+                )
             vectors = await embed_texts(pieces) if pieces else []
             if len(vectors) != len(pieces):
                 raise ValueError("embedding count does not match chunk count")
@@ -137,6 +145,10 @@ async def reap_stale_processing_documents_async(max_age_minutes: int | None = No
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age)
 
     async with SessionLocal() as db:
+        expired_sessions = await cleanup_expired_guest_sessions(db)
+        if expired_sessions:
+            logger.info("session cleanup removed %d expired guest sessions", expired_sessions)
+
         result = await db.execute(
             select(Document)
             .where(Document.status == "processing")

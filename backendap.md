@@ -1,6 +1,6 @@
 # Backend API Contract for Frontend and Agent Design
 
-Source of truth for current backend behavior.
+Source of truth for backend behavior.
 
 Primary code references:
 - `apps/api/app/main.py`
@@ -14,14 +14,29 @@ Primary code references:
 
 - Base URL (local): `http://127.0.0.1:8000`
 - OpenAPI docs: `GET /docs`
-- Auth: none
 - IDs: UUID strings
 - Error format: FastAPI style `{"detail":"..."}`
-- CORS (dev): localhost / 127.0.0.1 allowed by regex (port-flexible)
+- CORS: controlled by env (`CORS_ALLOW_ORIGINS`, `CORS_ALLOW_ORIGIN_REGEX`)
+  - in `staging/production`, wildcard origins/regex are rejected at startup
+
+Auth model (Guest Mode):
+- `POST /sessions/guest` returns a bearer token and may also set an `httpOnly` cookie when enabled.
+- Frontend may authenticate using `Authorization: Bearer <token>` and/or cookie transport.
+- Data access is session-scoped (meeting ownership enforced server-side).
+- Session TTL enforcement:
+  - idle timeout via `GUEST_SESSION_IDLE_TTL_HOURS`
+  - max session age via `GUEST_SESSION_MAX_AGE_HOURS`
+  - expired sessions are rejected and cleaned up.
+- Session management:
+  - `POST /sessions/reset` rotates session
+  - `DELETE /sessions/current` invalidates session + owned data
+- Cookie auth safety:
+  - optional cookie transport (`GUEST_SESSION_COOKIE_ENABLED=true`)
+  - mutating cookie-auth requests require CSRF header (`x-csrf-token`) matching CSRF cookie
 
 ## 2) Core Objects
 
-## 2.1 Meeting
+### 2.1 Meeting
 
 ```json
 {
@@ -31,7 +46,7 @@ Primary code references:
 }
 ```
 
-## 2.2 Document
+### 2.2 Document
 
 ```json
 {
@@ -49,7 +64,7 @@ Primary code references:
 }
 ```
 
-## 2.3 Chunk
+### 2.3 Chunk
 
 ```json
 {
@@ -62,7 +77,7 @@ Primary code references:
 }
 ```
 
-## 2.4 Run (observability)
+### 2.4 Run (observability)
 
 ```json
 {
@@ -81,6 +96,17 @@ Primary code references:
 }
 ```
 
+### 2.5 Guest Session
+
+```json
+{
+  "session_id": "<uuid>",
+  "token": "<bearer_token>",
+  "created_at": "...",
+  "expires_at": "..."
+}
+```
+
 ## 3) Endpoints
 
 ## 3.1 Health
@@ -93,6 +119,20 @@ Primary code references:
 {"ok": true}
 ```
 
+### `GET /health/ready`
+
+Checks DB + Redis queue connectivity.
+
+`200` when ready, `503` when any required dependency is down.
+
+### `GET /health/worker`
+
+Returns worker visibility via RQ worker registry.
+
+```json
+{"ok": true, "worker_count": 1}
+```
+
 ### `GET /`
 
 `200`
@@ -101,168 +141,99 @@ Primary code references:
 {"message":"API is running try /health or /docs"}
 ```
 
-## 3.2 Meetings
+## 3.2 Sessions
 
-### `POST /meetings?title=<title>`
+### `POST /sessions/guest`
 
-Creates meeting.
+Creates anonymous guest session token.
+Rate limited by IP (`RATE_LIMIT_SESSION_CREATE_PER_MINUTE_IP`).
+Also triggers cleanup of expired guest sessions.
 
 `200`
 
 ```json
-{"id":"<uuid>","title":"<title>","created_at":"2026-02-23T08:00:00Z"}
+{"token":"...","session_id":"<uuid>","created_at":"...","expires_at":"..."}
+```
+
+### `POST /sessions/reset`
+
+Invalidates current session (if present), creates a new guest session, and returns a fresh token.
+
+`200`
+
+```json
+{"token":"...","session_id":"<uuid>","created_at":"...","expires_at":"..."}
+```
+
+### `DELETE /sessions/current`
+
+Invalidates current guest session and deletes its owned data.
+
+`200`
+
+```json
+{"ok": true}
+```
+
+CSRF note:
+- if using cookie auth without `Authorization: Bearer`, mutating routes require:
+  - cookie `CSRF_COOKIE_NAME`
+  - header `x-csrf-token` with same value
+
+## 3.3 Meetings (Authorization required)
+
+### `POST /meetings?title=<title>`
+
+`200`
+
+```json
+{"id":"<uuid>","title":"<title>","created_at":"..."}
 ```
 
 ### `GET /meetings`
 
-Newest first.
-
-`200`
-
-```json
-[
-  {"id":"<uuid>","title":"Meeting A","created_at":"..."},
-  {"id":"<uuid>","title":"Meeting B","created_at":"..."}
-]
-```
+Returns meetings owned by current guest session only.
 
 ### `GET /meetings/{meeting_id}`
 
-`200`
+Returns meeting only if owned by current session.
 
-```json
-{"id":"<uuid>","title":"...","created_at":"..."}
-```
-
-`404`
-
-```json
-{"detail":"meeting not found"}
-```
-
-## 3.3 Documents
+## 3.4 Documents (Authorization required)
 
 ### `POST /meetings/{meeting_id}/documents`
 
 Text ingestion endpoint.
 
-Request body:
-
-```json
-{
-  "doc_type": "notes",
-  "filename": "m1.txt",
-  "text": "raw text"
-}
-```
-
-`200`
-
-```json
-{"document_id":"<uuid>","status":"pending"}
-```
-
-Errors:
-- `404 {"detail":"meeting not found"}`
-- `500 {"detail":"failed to enqueue indexing job"}`
-
 ### `POST /meetings/{meeting_id}/documents/upload`
 
-Multipart file ingestion.
+Multipart ingestion (single or multiple files).
 
-Form fields:
-- `doc_type` (required)
-- `file` (single) and/or `files` (multi)
-- `filename` (optional override)
-- `upload_id` (optional, echoed in response)
-
-Success response is one item for single upload, or list for multi upload.
-
-Single (`200`):
-
-```json
-{"document_id":"<uuid>","status":"pending","original_filename":"notes.md","upload_id":"batch-1"}
-```
-
-Multi (`200`):
-
-```json
-[
-  {"document_id":"<uuid>","status":"pending","original_filename":"a.md","upload_id":"batch-1"},
-  {"document_id":"<uuid>","status":"pending","original_filename":"b.txt","upload_id":"batch-1"}
-]
-```
-
-Validation/guardrail errors:
-- `400` no file, empty file, invalid doc_type
-- `404` meeting not found
-- `413` file too large (`MAX_UPLOAD_BYTES`, default 25MB)
-- `415` unsupported extension/MIME or mismatch
-- `500` queue enqueue failure
-
-Supported upload formats:
+Accepted types:
 - PDF, DOCX, PPTX, XLSX, HTML/HTM, EML, TXT/MD, PNG/JPG/JPEG/WEBP
+- Max files per request: `MAX_FILES_PER_UPLOAD_REQUEST` (default `10`, returns `413` when exceeded)
+
+Response:
+- single file: object
+- multi file: array of objects
+
+```json
+{"document_id":"<uuid>","status":"pending","original_filename":"a.md","upload_id":"batch-1"}
+```
 
 ### `GET /meetings/{meeting_id}/documents`
 
-Newest first.
-
-`200`
-
-```json
-[
-  {
-    "document_id":"<uuid>",
-    "meeting_id":"<uuid>",
-    "doc_type":"notes",
-    "filename":"m1.txt",
-    "original_filename":"m1.txt",
-    "mime_type":"text/plain",
-    "size_bytes":26,
-    "status":"pending|processing|indexed|failed",
-    "error":null,
-    "processing_started_at":null,
-    "indexed_at":null
-  }
-]
-```
-
-`404 {"detail":"meeting not found"}`
+Lists documents for owned meeting.
 
 ### `GET /documents/{document_id}`
 
-`200`
-
-```json
-{
-  "document_id":"<uuid>",
-  "status":"pending|processing|indexed|failed",
-  "filename":"...",
-  "original_filename":"...",
-  "mime_type":"...",
-  "size_bytes":123,
-  "error":null,
-  "processing_started_at":null,
-  "indexed_at":null
-}
-```
-
-`404 {"detail":"document not found"}`
+Returns document status if document belongs to owned meeting.
 
 ### `POST /documents/{document_id}/reindex`
 
-`200`
+Re-enqueues indexing for owned document.
+Protected by cooldown (`REINDEX_COOLDOWN_SECONDS`) and queue fairness caps.
 
-```json
-{"document_id":"<uuid>","status":"pending"}
-```
-
-Errors:
-- `404 {"detail":"document not found"}`
-- `409 {"detail":"document is already processing"}`
-- `500 {"detail":"failed to enqueue indexing job"}`
-
-## 3.4 Chat
+## 3.5 Chat (Authorization required)
 
 ### `POST /meetings/{meeting_id}/chat`
 
@@ -272,132 +243,167 @@ Request:
 {"question":"What did we decide?"}
 ```
 
-Response (`200`):
+Response:
 
 ```json
 {
   "answer":"...",
-  "citations":[
-    {"chunk_id":"<uuid>","quote":"..."}
-  ]
+  "citations":[{"chunk_id":"<uuid>","quote":"..."}],
+  "run_id":"<uuid>"
 }
 ```
 
-Errors:
-- `404 {"detail":"meeting not found"}`
-- `500 {"detail":"failed to embed question"}`
+Behavior:
+- Retrieval is meeting-scoped, top-k=6, embeddings-only chunks.
+- Recent chat turns are used for follow-up disambiguation.
+- Citations are generated deterministically server-side from retrieved chunks.
+- If no usable context exists: safe fallback answer and empty citations.
 
-Chat behavior details:
-- Retrieval is meeting-scoped, embeddings-only chunks, cosine distance, top-k=6.
-- Recent chat turns are loaded and used for follow-up disambiguation.
-- Citation pipeline:
-  - validates chunk_id allowlist + quote constraints
-  - retries once on invalid citations
-  - strips unsafe citations
-  - can return answer with fallback citations when quote format fails but chunk IDs are valid
-- Indexing/no-context behavior:
-  - If no chunks and meeting still indexing: indexing message
-  - If no chunks and no indexing: `I don't know based on the provided context.`
+### `GET /meetings/{meeting_id}/chat/history?limit=100`
 
-## 3.5 Verify
+Returns DB-backed chat history for owned meeting.
+
+```json
+[
+  {
+    "run_id":"<uuid>",
+    "question":"...",
+    "answer":"...",
+    "citations":[{"chunk_id":"<uuid>","quote":"..."}],
+    "created_at":"..."
+  }
+]
+```
+
+### `POST /meetings/{meeting_id}/chat/feedback`
+
+Telemetry for answer quality.
+
+Request:
+
+```json
+{"run_id":"<uuid>","verdict":"up|down","reason":"optional"}
+```
+
+## 3.6 Verify (Authorization required)
 
 ### `POST /meetings/{meeting_id}/verify`
 
-No request body.
+Returns structured summary/decisions/action items/issues.
 
-`200`
+Behavior:
+- Safe fallback response on internal verifier failure (no raw 500 leak).
+- Indexing-aware `missing_context` handling.
 
-```json
-{
-  "structured_summary":"...",
-  "decisions":["..."],
-  "action_items":[
-    {
-      "task":"...",
-      "owner":"...",
-      "due_date":"...",
-      "evidence_chunk_ids":["<chunk_uuid>"]
-    }
-  ],
-  "open_questions":["..."],
-  "issues":[
-    {
-      "type":"missing_owner|missing_due_date|vague|contradiction|missing_context|other",
-      "description":"...",
-      "evidence_chunk_ids":["<chunk_uuid>"]
-    }
-  ],
-  "had_retry": false,
-  "invalid_reason_counts": {}
-}
-```
+## 3.7 Evidence/Chunks (Authorization required)
 
-Errors:
-- `404 {"detail":"meeting not found"}`
+### `GET /chunks/{chunk_id}`
 
-Special handling:
-- endpoint no longer leaks raw 500s from verify engine; returns safe structured fallback on internal verify failures.
-- If indexing in progress and no indexed chunks, returns `missing_context` issue with indexing message.
+Returns chunk text + linked document metadata for evidence drawers/debug trust.
 
-## 3.6 Internal Ops
+## 3.8 Internal Ops
 
 ### `POST /internal/reaper/trigger?max_age_minutes=30`
 
-Header:
-- `x-reaper-token: <token>` if `REAPER_TRIGGER_TOKEN` configured.
+Optional header when token configured:
+- `x-reaper-token: <token>`
+- `x-admin-token: <ADMIN_API_TOKEN>` required
 
-`200`
+## 3.9 Analytics
 
+### `GET /analytics/answer-quality`
+### `GET /analytics/answer-quality?meeting_id=<uuid>`
+
+Returns aggregated chat quality telemetry (admin only):
+- total runs
+- avg latency
+- no-citation rate
+- feedback verdict counts
+
+Required header:
+- `x-admin-token: <ADMIN_API_TOKEN>`
+
+## 4) Rate Limits and Quotas
+
+Per-IP and per-session per-minute limits are enforced for:
+- session create (IP only)
+- upload
+- reindex
+- chat
+- verify
+
+Daily session quotas are enforced for:
+- uploads/day
+- upload MB/day
+- chats/day
+- verifies/day
+
+All limits are env-driven (`RATE_LIMIT_*`, `QUOTA_*`).
+
+Additional controls:
+- `MAX_ACTIVE_INDEX_JOBS_PER_SESSION` blocks one session from flooding queue.
+- `REINDEX_COOLDOWN_SECONDS` prevents rapid reindex loops.
+
+429 response shape (rate/quota/cooldown):
 ```json
-{"queued": true, "job_id":"..."}
+{
+  "detail": {
+    "code": "rate_limited|reindex_cooldown",
+    "message": "...",
+    "retry_after_seconds": 30
+  }
+}
 ```
 
-Errors:
-- `401 {"detail":"invalid reaper token"}`
-- `500 {"detail":"failed to enqueue reaper job: ..."}`
+JSON request size guard:
+- `MAX_JSON_BODY_BYTES` returns `413` for oversized JSON request bodies.
 
-## 4) Indexing State Machine
+## 4.1 Security Headers
+
+API responses include:
+- `Content-Security-Policy`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: no-referrer`
+- `X-Frame-Options: DENY`
+
+## 5) Indexing State Machine
 
 Document states:
-1. `pending` (created + queued)
-2. `processing` (worker started)
-3. terminal:
-   - `indexed`
-   - `failed`
+1. `pending`
+2. `processing`
+3. terminal: `indexed` | `failed`
 
-Recommended frontend handling:
-- Poll `GET /meetings/{meeting_id}/documents` every 2s while any doc is pending/processing.
-- Show `Indexing...` / `Ready` / `Failed` status badges.
-- Keep chat/verify UX aware of partial indexing.
+Frontend recommendation:
+- Poll `GET /meetings/{meeting_id}/documents` every 2s while any document is pending/processing.
 
-## 5) Extraction and Processing Behavior
+## 6) Extraction, OCR, and Storage
 
-Worker extraction pipeline:
-- Reads uploaded file from `storage_path`
-- Extracts text by format-specific extractor
-- Chunks text
-- Embeds chunks
-- Writes new chunks and marks indexed
-- Best-effort cleans old chunks after success
+Worker behavior:
+- Extracts text from file or OCR fallback (when `ENABLE_OCR=true` and OCR deps installed).
+- Chunks and embeds text.
+- Marks document `indexed` or `failed`.
+- Hard caps:
+  - `MAX_EXTRACTED_TEXT_CHARS`
+  - `MAX_CHUNKS_PER_DOCUMENT`
+  - `EXTRACTION_TIMEOUT_SECONDS`
+  - `OCR_TIMEOUT_SECONDS`
+  - `PDF_MAX_PAGES`
+- HTML/email extraction sanitizes script/style/noscript content before text extraction.
+- Malware scanning is not built-in by default; rely on strict allowlist + size/count caps unless AV is added.
 
-Guardrails:
-- extraction timeout: `EXTRACTION_TIMEOUT_SECONDS` (default `120`)
-- max extracted chars: `MAX_EXTRACTED_TEXT_CHARS` (default `2_000_000`)
-- oversized upload rejected at API edge (`MAX_UPLOAD_BYTES`)
+Storage abstraction:
+- `STORAGE_BACKEND=local` (dev)
+- `STORAGE_BACKEND=s3` (prod)
 
-Image files:
-- accepted at upload
-- extraction fails without OCR (`No extractable text found (image uploaded, OCR is not enabled).`)
+Required for S3:
+- `S3_BUCKET`
+- optional `S3_PREFIX`
 
-## 6) Queue and Worker
+## 7) Queue and Worker
 
 Queue behavior (`app/queue.py`):
 - index enqueue: `enqueue_index_document(document_id)`
-  - job id: `index-document-<document_id>`
-  - timeout: `INDEX_JOB_TIMEOUT_SECONDS` (default `900`)
-  - retries: `INDEX_JOB_RETRY_MAX` + `INDEX_JOB_RETRY_INTERVALS`
 - reaper enqueue: `enqueue_reaper_job(max_age_minutes)`
-  - job id: `reap-stale-processing-documents`
 
 Worker command:
 
@@ -405,14 +411,13 @@ Worker command:
 PYTHONPATH=. ./.venv/bin/rq worker default --url redis://localhost:6379/0 --with-scheduler
 ```
 
-## 7) Migrations
-
-Alembic is authoritative.
+## 8) Migrations
 
 Current revisions:
 - `20260222_0001_initial_schema`
 - `20260222_0002_runs_response_json`
 - `20260223_0003_documents_file_metadata`
+- `20260223_0004_guest_sessions_and_feedback`
 
 Apply:
 
@@ -421,33 +426,28 @@ cd apps/api
 ./.venv/bin/alembic upgrade head
 ```
 
-Stamp existing DB:
-
-```bash
-./.venv/bin/alembic stamp head
-```
-
-## 8) Frontend-Relevant Gaps
-
-- No auth/session model yet
-- No server-side chat history endpoint yet (history is currently local UI persistence)
-- OCR not enabled for image extraction
-
-## 9) Minimal cURL Sequence
+## 9) Minimal cURL Sequence (Guest Mode)
 
 ```bash
 API=http://127.0.0.1:8000
-MEETING_ID=$(curl -s -X POST "$API/meetings?title=Demo" | jq -r '.id')
+TOKEN=$(curl -s -X POST "$API/sessions/guest" | jq -r '.token')
+AUTH="Authorization: Bearer $TOKEN"
+
+MEETING_ID=$(curl -s -X POST "$API/meetings?title=Demo" -H "$AUTH" | jq -r '.id')
 
 curl -s -X POST "$API/meetings/$MEETING_ID/documents/upload" \
+  -H "$AUTH" \
   -F "doc_type=notes" \
   -F "files=@/absolute/path/to/sample-upload.md"
 
-curl -s "$API/meetings/$MEETING_ID/documents"
+curl -s "$API/meetings/$MEETING_ID/documents" -H "$AUTH"
 
 curl -s -X POST "$API/meetings/$MEETING_ID/chat" \
+  -H "$AUTH" \
   -H "Content-Type: application/json" \
   -d '{"question":"What did we decide?"}'
 
-curl -s -X POST "$API/meetings/$MEETING_ID/verify"
+curl -s "$API/meetings/$MEETING_ID/chat/history" -H "$AUTH"
+
+curl -s -X POST "$API/meetings/$MEETING_ID/verify" -H "$AUTH"
 ```

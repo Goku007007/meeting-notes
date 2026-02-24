@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from email import policy
 from email.parser import BytesParser
+import os
 from pathlib import Path
 
 
@@ -34,6 +35,9 @@ SUPPORTED_MIME_TYPES = frozenset(
     mime for mime_set in SUPPORTED_MIME_BY_EXTENSION.values() for mime in mime_set
 )
 GENERIC_MIME_TYPES = {"application/octet-stream", ""}
+OCR_ENABLED = os.getenv("ENABLE_OCR", "false").strip().lower() in {"1", "true", "yes", "on"}
+OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "30"))
+PDF_MAX_PAGES = int(os.getenv("PDF_MAX_PAGES", "100"))
 
 
 def validate_supported_upload(filename: str | None, mime_type: str | None) -> tuple[str, str]:
@@ -85,12 +89,18 @@ def _extract_pdf(path: Path) -> str:
 
     reader = PdfReader(str(path))
     parts: list[str] = []
-    for page in reader.pages:
+    pages = reader.pages
+    if PDF_MAX_PAGES > 0:
+        pages = pages[:PDF_MAX_PAGES]
+
+    for page in pages:
         page_text = page.extract_text() or ""
         if page_text.strip():
             parts.append(page_text)
 
     text = _normalize_text("\n".join(parts))
+    if not text and OCR_ENABLED:
+        text = _extract_pdf_with_ocr(path)
     if not text:
         raise NoExtractableTextError("No extractable text found (scanned PDF or image).")
     return text
@@ -147,6 +157,8 @@ def _extract_html(path: Path) -> str:
 
     html = _read_text_with_fallback(path)
     soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
     text = _normalize_text(soup.get_text(separator="\n"))
     if not text:
         raise NoExtractableTextError("No extractable text found in HTML.")
@@ -195,6 +207,8 @@ def _extract_eml(path: Path) -> str:
     body = "\n".join(plain_parts).strip()
     if not body and html_parts:
         soup = BeautifulSoup("\n".join(html_parts), "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
         body = soup.get_text(separator="\n")
     if body.strip():
         lines.append(body)
@@ -210,6 +224,58 @@ def _extract_plain_text(path: Path) -> str:
     if not text:
         raise NoExtractableTextError("No extractable text found in text file.")
     return text
+
+
+def _extract_image_with_ocr(path: Path) -> str:
+    try:
+        from PIL import Image
+        import pytesseract
+    except ModuleNotFoundError as exc:
+        raise NoExtractableTextError(
+            "No extractable text found (OCR dependencies are not installed)."
+        ) from exc
+
+    with Image.open(path) as image:
+        try:
+            text = pytesseract.image_to_string(image, timeout=OCR_TIMEOUT_SECONDS)
+        except RuntimeError as exc:
+            raise NoExtractableTextError(
+                f"OCR timed out after {OCR_TIMEOUT_SECONDS} seconds."
+            ) from exc
+    normalized = _normalize_text(text)
+    if not normalized:
+        raise NoExtractableTextError("No extractable text found in image.")
+    return normalized
+
+
+def _extract_pdf_with_ocr(path: Path) -> str:
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+    except ModuleNotFoundError as exc:
+        raise NoExtractableTextError(
+            "No extractable text found in PDF and OCR dependencies are not installed."
+        ) from exc
+
+    convert_kwargs: dict[str, int] = {}
+    if PDF_MAX_PAGES > 0:
+        convert_kwargs["first_page"] = 1
+        convert_kwargs["last_page"] = PDF_MAX_PAGES
+    pages = convert_from_path(str(path), **convert_kwargs)
+    parts: list[str] = []
+    for page in pages:
+        try:
+            ocr_text = pytesseract.image_to_string(page, timeout=OCR_TIMEOUT_SECONDS)
+        except RuntimeError as exc:
+            raise NoExtractableTextError(
+                f"OCR timed out after {OCR_TIMEOUT_SECONDS} seconds."
+            ) from exc
+        if ocr_text and ocr_text.strip():
+            parts.append(ocr_text)
+    normalized = _normalize_text("\n".join(parts))
+    if not normalized:
+        raise NoExtractableTextError("No extractable text found in scanned PDF.")
+    return normalized
 
 
 def extract_text_from_file(storage_path: str, mime_type: str | None = None) -> str:
@@ -239,9 +305,10 @@ def extract_text_from_file(storage_path: str, mime_type: str | None = None) -> s
     if extension == ".eml":
         return _extract_eml(file_path)
     if extension in {".png", ".jpg", ".jpeg", ".webp"}:
+        if OCR_ENABLED:
+            return _extract_image_with_ocr(file_path)
         raise NoExtractableTextError("No extractable text found (image uploaded, OCR is not enabled).")
 
     raise UnsupportedFormatError(
         f"unsupported format for extraction (mime={mime_type or 'unknown'}, ext={extension or 'none'})"
     )
-

@@ -1,10 +1,11 @@
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import select, text
 
-from app.db.models import Base, Meeting, Run
+from app.db.models import Base, GuestSession, Meeting, Run
 from app.db.session import SessionLocal, engine
 from app.jobs.indexing import index_document_async
 from app.main import create_document, chat_with_meeting
@@ -29,6 +30,11 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.create_all)
             await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS response_json JSONB;"))
         self.db = SessionLocal()
+        self.session = GuestSession(token=f"test-token-{uuid.uuid4()}")
+        self.db.add(self.session)
+        await self.db.commit()
+        await self.db.refresh(self.session)
+        self.request = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
 
     async def asyncTearDown(self) -> None:
         await self.db.rollback()
@@ -36,7 +42,7 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
     async def _create_meeting(self) -> str:
-        meeting = Meeting(title=f"it-{uuid.uuid4()}")
+        meeting = Meeting(title=f"it-{uuid.uuid4()}", session_id=self.session.id)
         self.db.add(meeting)
         await self.db.commit()
         await self.db.refresh(meeting)
@@ -44,7 +50,13 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def _ingest_doc(self, meeting_id: str, text_value: str) -> str:
         payload = DocumentCreate(doc_type="notes", filename="it.txt", text=text_value)
-        result = await create_document(uuid.UUID(meeting_id), payload, self.db)
+        result = await create_document(
+            uuid.UUID(meeting_id),
+            payload,
+            self.request,
+            self.session,
+            self.db,
+        )
         self.assertEqual(result.status, "pending")
         return result.document_id
 
@@ -93,6 +105,8 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
             response = await chat_with_meeting(
                 uuid.UUID(meeting_id),
                 ChatRequest(question="What did we decide?"),
+                self.request,
+                self.session,
                 self.db,
             )
             # Response must cite only retrieved chunks.
@@ -145,6 +159,8 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
             response = await chat_with_meeting(
                 uuid.UUID(meeting_id),
                 ChatRequest(question="What was approved?"),
+                self.request,
+                self.session,
                 self.db,
             )
             # Negative-path assertion: citations in this mocked case are intentionally outside retrieved set.

@@ -31,6 +31,7 @@ Run commands from `apps/api`.
 - `20260222_0001_initial_schema`
 - `20260222_0002_runs_response_json`
 - `20260223_0003_documents_file_metadata`
+- `20260223_0004_guest_sessions_and_feedback`
 
 Notes:
 - `DATABASE_URL` comes from env.

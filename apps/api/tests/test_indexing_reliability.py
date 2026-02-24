@@ -1,12 +1,13 @@
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
 
-from app.db.models import Base, Chunk, Document, Meeting
+from app.db.models import Base, Chunk, Document, GuestSession, Meeting
 from app.db.session import SessionLocal, engine
 from app.jobs.indexing import index_document_async, reap_stale_processing_documents_async
 from app.main import reindex_document
@@ -20,6 +21,11 @@ class IndexingReliabilityTests(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.create_all)
             await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS response_json JSONB;"))
         self.db = SessionLocal()
+        self.session = GuestSession(token=f"test-token-{uuid.uuid4()}")
+        self.db.add(self.session)
+        await self.db.commit()
+        await self.db.refresh(self.session)
+        self.request = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
 
     async def asyncTearDown(self) -> None:
         await self.db.rollback()
@@ -27,7 +33,7 @@ class IndexingReliabilityTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
     async def _create_document(self, status: str = "pending") -> Document:
-        meeting = Meeting(title=f"reliability-{uuid.uuid4()}")
+        meeting = Meeting(title=f"reliability-{uuid.uuid4()}", session_id=self.session.id)
         self.db.add(meeting)
         await self.db.flush()
 
@@ -49,7 +55,7 @@ class IndexingReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
         called: list[str] = []
         with patch("app.main.enqueue_index_document", lambda doc_id: called.append(doc_id) or "queued"):
-            response = await reindex_document(doc.id, self.db)
+            response = await reindex_document(doc.id, self.request, self.session, self.db)
 
         self.assertEqual(response.document_id, str(doc.id))
         self.assertEqual(response.status, "pending")
@@ -65,7 +71,7 @@ class IndexingReliabilityTests(unittest.IsolatedAsyncioTestCase):
         doc = await self._create_document(status="processing")
 
         with self.assertRaises(HTTPException) as ctx:
-            await reindex_document(doc.id, self.db)
+            await reindex_document(doc.id, self.request, self.session, self.db)
         self.assertEqual(ctx.exception.status_code, 409)
 
     async def test_reaper_marks_stale_processing_documents_failed(self) -> None:

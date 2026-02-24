@@ -3,12 +3,16 @@
 Meeting intelligence app with a FastAPI backend + Next.js frontend.
 
 Current capabilities:
+- Guest session auth + meeting ownership scoping
 - Meeting creation and listing
 - File upload ingestion (single or multi-file)
 - Background extraction + chunking + embeddings (RQ worker)
-- Retrieval-augmented chat (RAG) with citation guardrails
+- Retrieval-augmented chat (RAG) with deterministic server-side citations
 - Verify pipeline (decisions, actions, issues)
 - Run-level observability for chat/verify
+- Chat history API persisted in DB
+- Chunk inspector API for evidence drawers
+- Rate limits and daily quotas for expensive endpoints
 - ChatGPT-style frontend shell with meetings rail, chat composer, and artifacts rail
 
 ## Repository Layout
@@ -45,6 +49,9 @@ meeting-notes/
 - Queue-backed indexing path:
   - `POST /meetings/{meeting_id}/documents` (text ingest)
   - `POST /meetings/{meeting_id}/documents/upload` (multipart file ingest)
+- Guest auth path:
+  - `POST /sessions/guest`
+  - bearer token required for meeting/document/chat/verify/chunk routes
 - Supported file types at upload validation:
   - PDF, DOCX, PPTX, XLSX, HTML, EML, TXT/MD, PNG/JPG/WEBP
 - Upload guardrails:
@@ -54,13 +61,18 @@ meeting-notes/
   - extraction timeout (`EXTRACTION_TIMEOUT_SECONDS`)
   - max extracted text cap (`MAX_EXTRACTED_TEXT_CHARS`)
   - write new chunks first, clean previous chunks after commit
-- Chat guardrails:
-  - citations validated against retrieved chunks
-  - retry once with stricter constraints
-  - safe handling when citations are invalid
+- Storage backends:
+  - local (dev)
+  - S3-compatible object storage (prod)
+- Chat behavior:
+  - DB-backed history (`GET /meetings/{id}/chat/history`)
+  - deterministic server-side citation snippets from retrieved chunks
 - Verify guardrails:
   - strict JSON schema output
   - evidence validation + deterministic issue rules
+- Abuse controls:
+  - per-IP + per-session per-minute rate limits
+  - daily quotas for uploads/chats/verifies
 
 ## Frontend Highlights
 
@@ -74,7 +86,7 @@ meeting-notes/
   - poll meeting docs list while any doc is pending/processing
 - UX polish:
   - loading states and transitions
-  - chat history persisted per meeting in browser localStorage
+  - chat history loaded from backend (survives refresh/device)
 
 ## Local Development
 
@@ -137,19 +149,25 @@ Open:
 
 ```bash
 API=http://127.0.0.1:8000
-MEETING_ID=$(curl -s -X POST "$API/meetings?title=Smoke" | jq -r '.id')
+TOKEN=$(curl -s -X POST "$API/sessions/guest" | jq -r '.token')
+AUTH="Authorization: Bearer $TOKEN"
+MEETING_ID=$(curl -s -X POST "$API/meetings?title=Smoke" -H "$AUTH" | jq -r '.id')
 
 curl -s -X POST "$API/meetings/$MEETING_ID/documents/upload" \
+  -H "$AUTH" \
   -F 'doc_type=notes' \
   -F 'files=@/absolute/path/to/sample-upload.md'
 
-curl -s "$API/meetings/$MEETING_ID/documents"
+curl -s "$API/meetings/$MEETING_ID/documents" -H "$AUTH"
 
 curl -s -X POST "$API/meetings/$MEETING_ID/chat" \
+  -H "$AUTH" \
   -H 'Content-Type: application/json' \
   -d '{"question":"What did we decide?"}'
 
-curl -s -X POST "$API/meetings/$MEETING_ID/verify"
+curl -s "$API/meetings/$MEETING_ID/chat/history" -H "$AUTH"
+
+curl -s -X POST "$API/meetings/$MEETING_ID/verify" -H "$AUTH"
 ```
 
 ## Documentation Map
@@ -158,9 +176,10 @@ curl -s -X POST "$API/meetings/$MEETING_ID/verify"
 - Frontend architecture/UX plan: `frontend-plan.md`
 - Alembic usage: `apps/api/alembic/README.md`
 - Web app local run: `apps/web/README.md`
+- Deployment/env profiles: `infra/deployment.md`
 
 ## Notes
 
-- Auth is not implemented yet (demo/local mode).
-- Chat may return answers with no citations when citation quotes fail strict validation.
+- Guest-mode auth/ownership is enabled; each token sees only its own meetings.
+- OCR requires system OCR tooling (Tesseract/poppler) plus optional Python deps.
 - CORS is configured for localhost/127.0.0.1 dev origins (port-flexible).

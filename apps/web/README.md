@@ -47,7 +47,18 @@ npm start
 - Attachment-based chat composer
 - Polling document status during indexing
 - Verify panel for structured artifacts
-- Local per-meeting chat history persistence across refresh
+- Guest token auth (auto session creation)
+- DB-backed per-meeting chat history persistence across refresh/device
+- Citation drawer with server chunk inspection
+
+## E2E (Playwright)
+
+```bash
+cd apps/web
+npm i -D @playwright/test
+npx playwright install
+npx playwright test
+```
 
 ## Key Source Paths
 
