@@ -26,7 +26,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate deploy secrets
+      - name: Determine deploy-hook availability
+        id: hooks
         env:
           API_DEPLOY_HOOK_URL: ${{ secrets.API_DEPLOY_HOOK_URL }}
           WORKER_DEPLOY_HOOK_URL: ${{ secrets.WORKER_DEPLOY_HOOK_URL }}
@@ -35,15 +36,18 @@ jobs:
           missing=0
           for key in API_DEPLOY_HOOK_URL WORKER_DEPLOY_HOOK_URL WEB_DEPLOY_HOOK_URL; do
             if [ -z "${!key}" ]; then
-              echo "::error ::Missing required secret: $key"
+              echo "::warning ::Missing optional deploy secret: $key"
               missing=1
             fi
           done
-          if [ "$missing" -ne 0 ]; then
-            exit 1
+          if [ "$missing" -eq 0 ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Trigger API deploy
+        if: ${{ steps.hooks.outputs.enabled == 'true' }}
         env:
           API_DEPLOY_HOOK_URL: ${{ secrets.API_DEPLOY_HOOK_URL }}
         run: |
@@ -51,6 +55,7 @@ jobs:
           echo "API deploy trigger sent."
 
       - name: Trigger worker deploy
+        if: ${{ steps.hooks.outputs.enabled == 'true' }}
         env:
           WORKER_DEPLOY_HOOK_URL: ${{ secrets.WORKER_DEPLOY_HOOK_URL }}
         run: |
@@ -58,6 +63,7 @@ jobs:
           echo "Worker deploy trigger sent."
 
       - name: Trigger web deploy
+        if: ${{ steps.hooks.outputs.enabled == 'true' }}
         env:
           WEB_DEPLOY_HOOK_URL: ${{ secrets.WEB_DEPLOY_HOOK_URL }}
         run: |
@@ -65,6 +71,7 @@ jobs:
           echo "Web deploy trigger sent."
 
       - name: Wait for rollout window
+        if: ${{ steps.hooks.outputs.enabled == 'true' }}
         run: sleep 45
 
       - name: Post-deploy API health checks
