@@ -68,10 +68,14 @@ jobs:
         run: sleep 45
 
       - name: Post-deploy API health checks
-        if: ${{ (github.event_name == 'push' || github.event.inputs.run_health_checks == 'true') && secrets.PROD_API_BASE_URL != '' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.run_health_checks == 'true' }}
         env:
           PROD_API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
         run: |
+          if [ -z "$PROD_API_BASE_URL" ]; then
+            echo "PROD_API_BASE_URL is not set; skipping post-deploy health checks."
+            exit 0
+          fi
           curl --fail --show-error --silent "$PROD_API_BASE_URL/health" >/dev/null
           curl --fail --show-error --silent "$PROD_API_BASE_URL/health/ready" >/dev/null
           curl --fail --show-error --silent "$PROD_API_BASE_URL/health/worker" >/dev/null
