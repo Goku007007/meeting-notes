@@ -3,7 +3,7 @@ uvicorn[standard]==0.34.0
 SQLAlchemy==2.0.36
 asyncpg==0.30.0
 greenlet
-openai==2.21.0
+openai==2.23.0
 pgvector==0.4.2
 python-dotenv==1.2.1
 python-multipart
