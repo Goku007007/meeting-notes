@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiGet, apiPost, apiPostForm } from "@/lib/api";
 
+const DOCUMENT_STATUS_POLL_INTERVAL_MS = 5000;
+
 export type DocumentStatus = "pending" | "processing" | "indexed" | "failed";
 
 export type MeetingDocument = {
@@ -46,7 +48,7 @@ export function useMeetingDocuments(meetingId: string) {
     refetchInterval: (query) => {
       const docs = (query.state.data ?? []) as MeetingDocument[];
       return docs.some((doc) => doc.status === "pending" || doc.status === "processing")
-        ? 2000
+        ? DOCUMENT_STATUS_POLL_INTERVAL_MS
         : false;
     },
   });
